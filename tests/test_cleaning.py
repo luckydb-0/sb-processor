@@ -54,3 +54,24 @@ def test_repeated_navigation_suppresses_later_page_but_preserves_provenance():
 def test_repeated_short_section_title_is_retained():
     cleaned = DocumentCleaner().clean(document([page(i, "Introduction") for i in range(1, 4)]))
     assert all(p.include_in_llm_context for p in cleaned.pages)
+
+
+def test_marked_layout_footer_is_removed_from_markdown():
+    pages = []
+    for i in range(1, 4):
+        item = page(i, f"Unique content {i}", "CourseFooter")
+        item.raw_text = f"Unique content {i}\n<mark>Course Footer</mark>"
+        pages.append(item)
+    cleaned = DocumentCleaner().clean(document(pages))
+    assert "Course Footer" not in cleaned.cleaned_markdown()
+    assert "Unique content 3" in cleaned.cleaned_markdown()
+
+
+def test_near_duplicate_outline_with_section_change_is_suppressed():
+    outline = "1 General information 2 Introduction to Machine Learning 3 Examples 4 Tasks 5 Software 6 Data Sets 20 32 42 49"
+    first = page(1, "General information\n" + outline)
+    second = page(2, "Unique detail")
+    third = page(3, "Introduction to Machine Learning\n" + outline)
+    cleaned = DocumentCleaner().clean(document([first, second, third]))
+    assert cleaned.pages[0].include_in_llm_context
+    assert cleaned.pages[2].suppression_reason == "repeated_navigation"

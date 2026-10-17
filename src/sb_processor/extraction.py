@@ -93,11 +93,18 @@ class AnyDocExtractor:
                     text = anydoc.to_markdown_bytes(single.tobytes(), "pdf", ocr="reject")
                 except anydoc.NeedsOcrError as exc:
                     raise ValueError("PDF needs OCR; anydoc hosted OCR is disabled in this PoC") from exc
+                except anydoc.UnsupportedError as exc:
+                    if "no extractable text" not in str(exc).lower():
+                        raise
+                    # AnyDoc can reject a single-page conversion even when the
+                    # source PDF has usable text. Preserve the gap explicitly.
+                    text = ""
                 finally:
                     single.close()
                 pages.append(ExtractedPage(page_number=index, raw_text=text.strip(),
                                            width=page.rect.width, height=page.rect.height,
-                                           metadata={"block_positions_available": False}))
+                                           metadata={"block_positions_available": False,
+                                                     "anydoc_page_rejected": not bool(text.strip())}))
             return ExtractedDocument(source=str(source), extractor="anydoc", page_count=len(pdf), pages=pages,
                                      metadata=dict(pdf.metadata))
 

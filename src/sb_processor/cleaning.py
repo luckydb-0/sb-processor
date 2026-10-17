@@ -48,11 +48,19 @@ def _counter_at_edge(page: ExtractedPage, block: ExtractedBlock) -> bool:
 
 def _remove_block_lines(text: str, removed: list[ExtractedBlock]) -> str:
     rejected = Counter(normalize(line) for block in removed for line in block.text.splitlines() if line.strip())
+    compact_rejected = Counter(re.sub(r"[^\w]", "", key) for key, count in rejected.items() for _ in range(count))
     result = []
     for line in text.splitlines():
-        key = normalize(line)
+        key = normalize(re.sub(r"</?mark>", "", line, flags=re.I))
         if key and rejected[key]:
             rejected[key] -= 1
+            compact_rejected[re.sub(r"[^\w]", "", key)] -= 1
+            continue
+        compact = re.sub(r"[^\w]", "", key)
+        matched = next((candidate for candidate, count in compact_rejected.items()
+                        if count and len(candidate) >= 4 and candidate == compact), None)
+        if matched:
+            compact_rejected[matched] -= 1
             continue
         result.append(line)
     return "\n".join(result).strip()
@@ -60,10 +68,19 @@ def _remove_block_lines(text: str, removed: list[ExtractedBlock]) -> str:
 
 def _is_navigation(text: str) -> bool:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if len(lines) < 4 or len(text.split()) < 8:
+    if len(lines) < 2 or len(text.split()) < 8:
         return False
     list_lines = sum(bool(re.match(r"^(?:[-*•]|\d+[.)])\s", line)) for line in lines)
-    return bool(NAVIGATION.search(" ".join(lines[:2]))) or list_lines >= 4
+    number_count = len(re.findall(r"\b\d{1,3}\b", text))
+    return bool(NAVIGATION.search(" ".join(lines[:2]))) or list_lines >= 4 or (number_count >= 5 and len(text.split()) >= 15)
+
+
+def _navigation_similar(a: str, b: str) -> bool:
+    if _similar(a, b):
+        return True
+    left, right = set(a.split()), set(b.split())
+    shared = left & right
+    return len(shared) >= 12 and len(shared) / len(left | right) >= 0.75
 
 
 class DocumentCleaner:
@@ -103,7 +120,7 @@ class DocumentCleaner:
         for page in pages:
             text = page.cleaned_text or ""
             key = normalize(text)
-            if _is_navigation(text) and any(_similar(key, old) for _, old in previous):
+            if _is_navigation(text) and any(_navigation_similar(key, old) for _, old in previous):
                 page.include_in_llm_context = False
                 page.suppression_reason = "repeated_navigation"
             if _is_navigation(text):

@@ -1,4 +1,5 @@
 import sys
+import json
 from types import SimpleNamespace
 
 import pymupdf
@@ -47,6 +48,13 @@ def test_comparison_writes_both_extractions_without_llm(tmp_path):
     assert "anydoc.md" in (output / "summary.md").read_text()
     assert "Explicit page markers" in (output / "summary.md").read_text()
     assert "Markdown headings" in (output / "summary.md").read_text()
+    assert "Principal Component Analysis" in (output / "pymupdf_clean.md").read_text()
+    assert "Principal Component Analysis" in (output / "pymupdf4llm_raw.md").read_text()
+    assert (output / "anydoc_whole_document.md").exists()
+    assert (output / "cleaning_report.md").exists()
+    comparison = json.loads((output / "comparison.json").read_text())
+    assert comparison["extractors"]["pymupdf4llm"]["pages_in_source"] == 1
+    assert comparison["extractors"]["anydoc"]["whole_document_page_provenance"] is False
 
 
 def test_anydoc_rejects_textless_pdf(tmp_path):

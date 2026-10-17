@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import logging
-import re
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 import pymupdf
 
 log = logging.getLogger(__name__)
-PdfExtractor = Literal["pymupdf", "anydoc"]
+PdfExtractor = Literal["pymupdf", "anydoc", "pymupdf4llm"]
 MAX_SOURCE_CHARS = 120_000
 
 
@@ -38,6 +35,9 @@ def extract_pdf(source: Path, extractor: PdfExtractor = "pymupdf") -> str:
             result = anydoc.to_markdown(source, ocr="reject")
         except anydoc.NeedsOcrError as exc:
             raise ValueError("PDF needs OCR; anydoc hosted OCR is disabled in this PoC") from exc
+    elif extractor == "pymupdf4llm":
+        from .extraction import extract_document
+        result = extract_document(source, extractor).raw_markdown()
     else:
         raise ValueError(f"Unknown PDF extractor: {extractor}")
     if not result.strip():
@@ -49,26 +49,6 @@ def extract_pdf(source: Path, extractor: PdfExtractor = "pymupdf") -> str:
 
 
 def compare_pdf_extractors(source: Path, output_root: Path) -> Path:
-    """Save both raw conversions and simple measurements, without an LLM call."""
-    source = Path(source).resolve(strict=True)
-    outputs = {}
-    for extractor in ("pymupdf", "anydoc"):
-        outputs[extractor] = extract_pdf(source, extractor)
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
-    run = Path(output_root) / f"compare_{run_id}"
-    run.mkdir(parents=True)
-    for extractor, content in outputs.items():
-        (run / f"{extractor}.md").write_text(content.rstrip() + "\n", encoding="utf-8")
-    lines = [
-        "# PDF extraction comparison", "", f"Source: `{source}`", "",
-        "| Extractor | Output | Characters | Words | Explicit page markers | Markdown headings |",
-        "| --- | --- | ---: | ---: | ---: | ---: |",
-    ]
-    for extractor, content in outputs.items():
-        pages = len(re.findall(r"^\[Page \d+\]$", content, re.MULTILINE))
-        headings = len(re.findall(r"^#{1,6} ", content, re.MULTILINE))
-        lines.append(f"| {extractor} | [{extractor}.md]({extractor}.md) | {len(content)} | {len(content.split())} | {pages} | {headings} |")
-    lines += ["", "Inspect both Markdown files for headings, equations, tables, reading order, and source references. Marker counts describe the output format, not extraction quality.", ""]
-    (run / "summary.md").write_text("\n".join(lines), encoding="utf-8")
-    log.info("Saved PDF extraction comparison at %s", run)
-    return run
+    """Save raw/clean conversions and provenance reports without an LLM call."""
+    from .comparison import compare_pdf_extractors as compare
+    return compare(source, output_root)
