@@ -28,13 +28,16 @@ python -m sb_processor process --workflow university --source /path/to/lecture.p
 python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb --pdf-extractor anydoc
 python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb --pdf-extractor pymupdf4llm
 python -m sb_processor compare-pdf --source /path/to/lecture.pdf --output-dir output/extraction_comparison --vault ../gd-gdb
+python -m sb_processor ingest-pdf --source /path/to/lecture.pdf --vault ../gd-gdb
 ```
 
 The process command rebuilds the registry automatically. Its default output paths are `.data/registry.sqlite` and `staging/run_<UTC timestamp>_<id>/`. Override with `--database` and `--staging`; both must resolve outside the vault. Use `--model` to select a Structured Outputs capable OpenAI model (default `gpt-4o-mini`). Use `--rules`, `--templates`, and `--instructions` to supply alternate university files. Without overrides, the workflow expects the three files in the vault's `+ Inbox` folder.
 
 `--pdf-extractor` selects `pymupdf` (default), `anydoc`, or `pymupdf4llm`. Install optional backends with `pip install -e '.[anydoc,layout]'`. The extractor returns numbered pages with raw text, positioned blocks where available, and image/drawing coverage metadata. The deterministic cleaner removes repeated edge-position headers/footers and page counters, suppresses later near-duplicate navigation pages, consolidates contiguous running section labels, normalizes known ligatures and whitespace artefacts, and joins clear wraps within text blocks. Each transformation has an auditable action in the structured document. Original PDF text and page numbers remain intact. AnyDoc single-page failures fall back to raw PyMuPDF for that page and are recorded in metadata.
 
-Pages with little extracted text and substantial image or vector coverage receive `requires_visual_processing` and `visual_flags` in the structured output. This is a review signal: no visual model or specialized table fallback runs. The existing workflow sends cleaned page-marked text to the model; it does not yet use the visual flags to gate proposals.
+Pages with little extracted text and substantial image or vector coverage receive `requires_visual_processing` and `visual_flags`. `ingest-pdf` renders only those pages and asks an OpenAI vision model to extract additional visible relationships. It stores raw text, cleaned text, and visual descriptions separately under `staging/ingestion/ingest_<id>/` as `document.json`, `text_raw.md`, `text_clean.md`, `agent_context.md`, and `summary.json`. The default model is `gpt-4o-mini`; set `--visual-model` to change it. The model receives one rendered page and local context. Successful results are cached in `.data/visual_cache` using the source hash, rendered page hash, and model/prompt identity. Output and cache locations must be outside the vault.
+
+The document's `completeness` object reports `COMPLETE` or `PARTIAL`, flagged pages, processed pages, and unresolved pages. A failed, empty, or ambiguous visual response remains unresolved. If the API key is unavailable or `--skip-visual` is set, flagged pages remain `PENDING`. `process` stops before the proposal call on a partial source. To proceed deliberately, pass `--allow-incomplete-visuals`; the staged proposal retains `PARTIAL` and lists unresolved pages for review. The source context preserves original page numbers and labels text and visual content separately. No specialized table fallback runs.
 
 `compare-pdf` runs all three backends locally without a model or API key. Each run saves `<extractor>_raw.md`, `<extractor>_clean.md`, `<extractor>_document.json`, `comparison.json`, `comparison.md`, and `cleaning_report.md`. The JSON retains raw page text, block and line positions, section ranges, visual features, and cleaning decisions; `anydoc_whole_document.md` preserves the prior whole-document conversion separately because it cannot reliably identify source pages. Character/word savings are measured, while token counts use a rough characters/4 estimate. Inspect representative slides: headings, reading order, tables, diagrams, equations, and bibliography can differ even when word counts look similar. `--vault` is required so output cannot be placed inside the vault.
 
@@ -56,7 +59,7 @@ conflicts/            duplicate-target drafts when present
 
 The registry supports normalized exact title, filename, alias, path, and note-type queries, plus a simple lexical candidate search. Lookup returns possible notes, never a semantic-equivalence decision. A `CREATE` with candidates or an existing target becomes `REVIEW_REQUIRED`. An `UPDATE` becomes `REVIEW_REQUIRED` if its target does not exist or its current body was not sent to the model. Unsafe paths, duplicate targets, and missing Markdown content also require review. All proposals remain staged only, including those marked `CREATE` or `UPDATE`.
 
-All three extractors run locally and accept text-based PDFs. The `anydoc` path explicitly uses `ocr="reject"`; it never invokes anydoc's hosted OCR, which would send a PDF to Firecrawl. Image-only PDFs need OCR before this PoC can process them. Sources over 120,000 cleaned characters are rejected instead of silently truncated. No embeddings, vector database, web app, Agent B execution, or vault write operation is included.
+All three text extractors run locally and accept text-based PDFs. The `anydoc` path explicitly uses `ocr="reject"`; it never invokes anydoc's hosted OCR, which would send a PDF to Firecrawl. Image-only PDFs need OCR before this PoC can process them. Visual enrichment sends only detector-flagged page images to the configured OpenAI API. Sources over 120,000 Agent A context characters are rejected instead of silently truncated. No embeddings, vector database, web app, Agent B execution, or vault write operation is included.
 
 ## Tests
 
@@ -64,6 +67,6 @@ All three extractors run locally and accept text-based PDFs. The `anydoc` path e
 python -m pytest -q
 ```
 
-Tests cover scanning/frontmatter, registry rebuild and matching, safe staging, update checks, both PDF extractors, comparison output, and the OpenAI structured-output call shape. They use a fake LLM for deterministic integration; a live OpenAI processing run requires a PDF and `OPENAI_API_KEY`.
+Tests cover scanning/frontmatter, registry rebuild and matching, safe staging, update checks, PDF extractors, comparison output, completeness gating, selective rendering, caching, failures, and both OpenAI request shapes. They use fake clients for deterministic integration; a live visual run requires a PDF and `OPENAI_API_KEY`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the file map, schemas, SQLite tables, and design choices.
