@@ -165,3 +165,13 @@ def test_reflow_does_not_join_across_separate_blocks():
     lines = ["This sentence is long enough to wrap near the page margin and", "continues naturally on the next line."]
     clean = DocumentCleaner().clean(document([reflow_page(lines, [78, 45], separate=True)]))
     assert clean.pages[0].cleaned_text == "\n".join(lines)
+
+
+def test_reflow_preserves_fenced_code_table_and_numbered_list():
+    cases = [(["```", "a very long code line that extends across most of the available space", "continues as a separate code line", "```"],
+              [20, 80, 55, 20]),
+             (["| a long table cell with many words across most of the page |", "| continuation that belongs to the next row |"], [80, 70]),
+             (["1. first item with a long explanation across the slide", "2. second item with another detail"], [78, 70])]
+    for lines, widths in cases:
+        clean = DocumentCleaner().clean(document([reflow_page(lines, widths)]))
+        assert clean.pages[0].cleaned_text == "\n".join(lines)

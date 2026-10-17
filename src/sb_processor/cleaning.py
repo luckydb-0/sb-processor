@@ -196,6 +196,8 @@ def _reflow_page(page: ExtractedPage) -> None:
         lines = block.text.splitlines()
         if len(lines) < 2 or len(lines) != len(block.line_bboxes) or block.text.strip() not in page.cleaned_text:
             continue
+        if any(line.lstrip().startswith(("```", "~~~")) or line.startswith("    ") for line in lines):
+            continue
         result = [lines[0]]
         changes = []
         for index in range(1, len(lines)):
