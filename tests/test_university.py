@@ -76,7 +76,7 @@ def test_university_workflow_can_select_anydoc(tmp_path, monkeypatch):
 
     monkeypatch.setattr("sb_processor.workflows.university.extract_document", fake_extract)
     context = UniversityWorkflow(pdf_extractor="anydoc").prepare(pdf, vault)
-    assert context["source_text"] == "[Page 1]\n# Converted lecture"
+    assert context["source_text"] == "[Page 1]\nTEXT:\n# Converted lecture"
     assert context["pdf_extractor"] == "anydoc"
     assert calls == [(pdf, "anydoc")]
 

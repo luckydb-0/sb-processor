@@ -1,7 +1,8 @@
 import json
+import pytest
 
 from sb_processor.models import Action, DraftChange, LLMProposal
-from sb_processor.pipeline import process_source
+from sb_processor.pipeline import IncompleteDocumentError, process_source
 from sb_processor.registry import Registry
 from sb_processor.vault import scan_vault
 
@@ -102,3 +103,52 @@ def test_update_without_existing_body_in_model_context_requires_review(tmp_path)
     assert proposal["note_changes"][0]["action"] == "REVIEW_REQUIRED"
     assert proposal["note_changes"][0]["original_content_hash"]
     assert original.read_text() == "# Existing\nZebras only"
+
+
+class PartialWorkflow:
+    name = "fixture"
+
+    def prepare(self, source, vault):
+        return {"source_text": "[Page 13]\nTEXT:\nDiagram\nVISUAL CONTENT: UNRESOLVED",
+                "document_completeness": {"status": "PARTIAL", "text_extraction_complete": True,
+                                          "visual_pages": [13], "visual_pages_processed": [],
+                                          "unprocessed_visual_pages": [13]}}
+
+
+class TrackingLLM(FakeLLM):
+    def __init__(self):
+        self.calls = []
+
+    def generate_processing_proposal(self, *, context):
+        self.calls.append(context)
+        return super().generate_processing_proposal(context=context)
+
+
+def test_partial_source_blocks_llm_without_override(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"fixture")
+    llm = TrackingLLM()
+    with pytest.raises(IncompleteDocumentError) as error:
+        process_source(vault_path=vault, source_path=source, staging_path=tmp_path / "stage",
+                       database_path=tmp_path / "db.sqlite", workflow=PartialWorkflow(), llm=llm)
+    assert error.value.completeness.unprocessed_visual_pages == [13]
+    assert llm.calls == []
+
+
+def test_explicit_override_preserves_partial_status_in_staging(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"fixture")
+    llm = TrackingLLM()
+    run = process_source(vault_path=vault, source_path=source, staging_path=tmp_path / "stage",
+                         database_path=tmp_path / "db.sqlite", workflow=PartialWorkflow(), llm=llm,
+                         allow_incomplete_visuals=True)
+    assert len(llm.calls) == 1
+    context = json.loads((run / "request_context.json").read_text())
+    proposal = json.loads((run / "proposal.json").read_text())
+    assert context["incomplete_visuals_override"] is True
+    assert context["document_completeness"]["unprocessed_visual_pages"] == [13]
+    assert proposal["source_completeness"]["status"] == "PARTIAL"

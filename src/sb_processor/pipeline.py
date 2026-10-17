@@ -5,6 +5,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from .llm import LLMClient
+from .extraction import ProcessingCompleteness, CompletenessStatus
 from .models import Action, NoteChange, ProcessingProposal
 from .registry import Registry
 from .staging import stage_proposal
@@ -20,6 +21,13 @@ class Workflow(Protocol):
         ...
 
 
+class IncompleteDocumentError(ValueError):
+    def __init__(self, completeness: ProcessingCompleteness):
+        self.completeness = completeness
+        super().__init__(f"Document is PARTIAL; unresolved visual pages: {completeness.unprocessed_visual_pages}. "
+                         "Use --allow-incomplete-visuals only if a qualified proposal is acceptable.")
+
+
 def _outside_vault(path: Path, vault: Path) -> bool:
     return not path.resolve().is_relative_to(vault.resolve())
 
@@ -33,7 +41,7 @@ def _safe_target(target: str, vault: Path) -> bool:
     return (vault / target).resolve().is_relative_to(vault)
 
 
-def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, database_path: Path, workflow: Workflow, llm: LLMClient) -> Path:
+def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, database_path: Path, workflow: Workflow, llm: LLMClient, allow_incomplete_visuals: bool = False) -> Path:
     vault = Path(vault_path).resolve(strict=True)
     source = Path(source_path).resolve(strict=True)
     stage = Path(staging_path).resolve()
@@ -46,6 +54,12 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
     note_count = registry.rebuild(scan_vault(vault))
     log.info("Registry rebuilt from %d Markdown notes", note_count)
     workflow_context = workflow.prepare(source, vault)
+    completeness = (ProcessingCompleteness.model_validate(workflow_context["document_completeness"])
+                    if "document_completeness" in workflow_context else None)
+    if completeness and completeness.status == CompletenessStatus.PARTIAL and not allow_incomplete_visuals:
+        raise IncompleteDocumentError(completeness)
+    workflow_context["incomplete_visuals_override"] = bool(
+        allow_incomplete_visuals and completeness and completeness.status == CompletenessStatus.PARTIAL)
     if "source_text" not in workflow_context:
         raise ValueError("Workflow context must contain source_text")
     inventory = [{"path": n.path, "title": n.title, "note_type": n.note_type, "aliases": n.aliases} for n in registry.all_notes()]
@@ -96,5 +110,5 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         change = NoteChange(**item.model_dump(exclude={"action"}), action=action, candidate_existing_notes=candidates, original_content_hash=target_note.content_hash if target_note else None)
         changes.append(change)
         log.info("Proposed action %s for %s -> %s", action.value, item.title, item.target_path)
-    proposal = ProcessingProposal(workflow=workflow.name, source=str(source), source_summary=draft.source_summary, vault_note_count=note_count, note_changes=changes, review_required=review_items)
+    proposal = ProcessingProposal(workflow=workflow.name, source=str(source), source_summary=draft.source_summary, vault_note_count=note_count, note_changes=changes, review_required=review_items, source_completeness=completeness)
     return stage_proposal(stage, proposal, context, safe_paths)

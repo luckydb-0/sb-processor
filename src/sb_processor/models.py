@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from .extraction import ProcessingCompleteness
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -66,6 +68,7 @@ class ProcessingProposal(StrictModel):
     vault_note_count: int
     note_changes: list[NoteChange]
     review_required: list[str]
+    source_completeness: ProcessingCompleteness | None = None
 
 
 class ReviewStatus(str, Enum):
