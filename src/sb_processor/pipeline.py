@@ -5,9 +5,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from .llm import LLMClient
+from .agent_a import build_agent_a_request
 from .extraction import ProcessingCompleteness, CompletenessStatus
-from .models import Action, NoteChange, ProcessingProposal
+from .models import Action, LLMProposal, NoteChange, NoteMetadata, ProcessingProposal
 from .registry import Registry
+from .retrieval import RetrievalPolicy, retrieve_notes, source_candidate_terms
 from .staging import stage_proposal
 from .vault import scan_vault
 
@@ -65,20 +67,18 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         allow_incomplete_visuals and completeness and completeness.status == CompletenessStatus.PARTIAL)
     if "source_text" not in workflow_context:
         raise ValueError("Workflow context must contain source_text")
-    inventory = [{"path": n.path, "title": n.title, "note_type": n.note_type, "aliases": n.aliases} for n in registry.all_notes()]
-    relevant = registry.relevant(workflow_context["source_text"])
-    relevant_paths = {note.path for note in relevant}
-    context = {
-        "workflow": workflow.name,
-        "source_filename": source.name,
-        **workflow_context,
-        "vault_inventory": inventory,
-        "relevant_existing_notes": [{"path": n.path, "title": n.title, "note_type": n.note_type, "frontmatter": n.frontmatter, "body": n.body[:6000]} for n in relevant],
-        "path_instruction": "All target_path values must be relative .md paths within the vault. Use only the workflow's note types and conventions. If a possible equivalent note exists, prefer REVIEW_REQUIRED or a conservative UPDATE with its exact path. Include a complete proposed Markdown file for CREATE/UPDATE.",
-    }
-    log.info("Context: %d inventory entries, %d relevant notes, %d source characters", len(inventory), len(relevant), len(workflow_context["source_text"]))
+    policy_factory = getattr(workflow, "retrieval_policy", None)
+    policy = policy_factory(vault, workflow_context) if callable(policy_factory) else RetrievalPolicy(
+        roots=workflow_context.get("suggested_note_roots") or {"concept": "Dots", "map": "Maps"})
+    terms = workflow_context.get("candidate_terms") or source_candidate_terms(workflow_context["source_text"], source.name)
+    retrieval = retrieve_notes(registry, workflow_context["source_text"], terms, policy)
+    request, diagnostics = build_agent_a_request(workflow.name, source, workflow_context, retrieval)
+    context = request.model_dump(mode="json")
+    relevant_paths = set(retrieval.loaded_bodies)
+    log.info("Context: %d candidates, %d bodies, %d request characters", len(retrieval.candidates),
+             len(relevant_paths), diagnostics.total_request_chars)
     try:
-        draft = llm.generate_processing_proposal(context=context)
+        draft = LLMProposal.model_validate(llm.generate_processing_proposal(context=context))
     except Exception:
         log.exception("Structured proposal generation or validation failed")
         raise
@@ -89,9 +89,12 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
     safe_paths = []
     seen_paths: set[str] = set()
     for item in draft.note_changes:
-        candidates = registry.lookup(item.title)
+        candidates = [c for c in retrieve_notes(registry, "", [item.title], policy, load_bodies=False).candidates
+                      if c.note_type == item.note_type]
         log.info("Lookup %r: %s", item.title, [(c.path, c.match_kind) for c in candidates])
-        safe = _safe_target(item.target_path, vault)
+        target_meta = NoteMetadata(path=item.target_path, filename=PurePosixPath(item.target_path).name,
+                                   title=item.title, note_type=item.note_type, aliases=[], maps=[])
+        safe = _safe_target(item.target_path, vault) and policy.kind(target_meta) == item.note_type
         safe_paths.append(safe)
         target_note = registry.get(item.target_path) if safe else None
         action = item.action
@@ -116,4 +119,4 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         changes.append(change)
         log.info("Proposed action %s for %s -> %s", action.value, item.title, item.target_path)
     proposal = ProcessingProposal(workflow=workflow.name, source=str(source), source_summary=draft.source_summary, vault_note_count=note_count, note_changes=changes, review_required=review_items, source_completeness=completeness)
-    return stage_proposal(stage, proposal, context, safe_paths)
+    return stage_proposal(stage, proposal, context, safe_paths, diagnostics)

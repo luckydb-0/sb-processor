@@ -50,6 +50,9 @@ def test_pipeline_stages_proposal_without_changing_vault(tmp_path):
     assert old.read_bytes() == original
     assert (run / "review.md").exists()
     assert (run / "request_context.json").exists()
+    diagnostics = json.loads((run / "context_diagnostics.json").read_text())
+    assert diagnostics["full_note_bodies_loaded"] == 1
+    assert diagnostics["total_request_chars"] > diagnostics["source_chars"]
 
 
 def test_pipeline_rejects_staging_inside_vault(tmp_path):
@@ -172,3 +175,34 @@ def test_visual_override_does_not_allow_failed_text_extraction(tmp_path):
                        database_path=tmp_path / "db.sqlite", workflow=FailedTextWorkflow(), llm=llm,
                        allow_incomplete_visuals=True)
     assert llm.calls == []
+
+
+def test_pipeline_excludes_unrelated_files_and_long_rules(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / "Dots").mkdir(parents=True)
+    (vault / "Dots" / "Machine Learning.md").write_text("# Machine Learning\nRelevant body")
+    (vault / "Dots" / "README - Machine Learning.md").write_text("# Machine Learning\nUnrelated README body")
+    (vault / "+ Inbox").mkdir()
+    (vault / "+ Inbox" / "Agent A - Machine Learning.md").write_text("# Machine Learning\nUnrelated prompt body")
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"fixture")
+
+    class Workflow:
+        name = "fixture"
+
+        def prepare(self, source, vault):
+            return {"source_text": "[Page 1]\nTEXT:\nMachine Learning", "candidate_terms": ["Machine Learning"],
+                    "instructions": "Compact", "rules": "Long historical rules", "templates": "Template",
+                    "suggested_note_roots": {"concept": "Dots"}}
+
+    llm = TrackingLLM()
+    run = process_source(vault_path=vault, source_path=source, staging_path=tmp_path / "stage",
+                         database_path=tmp_path / "db.sqlite", workflow=Workflow(), llm=llm)
+    request = json.loads((run / "request_context.json").read_text())
+    diagnostics = json.loads((run / "context_diagnostics.json").read_text())
+    assert "Long historical rules" not in str(request)
+    assert "README" not in str(request)
+    assert "Unrelated prompt body" not in str(request)
+    assert [n["path"] for n in request["relevant_existing_notes"]] == ["Dots/Machine Learning.md"]
+    assert any(x["path"].endswith("README - Machine Learning.md") for x in diagnostics["excluded"])
+    assert any(x["path"].startswith("+ Inbox/") for x in diagnostics["excluded"])

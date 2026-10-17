@@ -8,6 +8,7 @@ from ..extraction import extract_document
 from ..ingestion import ingest_pdf
 from ..pdf import MAX_SOURCE_CHARS, PdfExtractor
 from ..visual import VisualPageExtractor
+from ..retrieval import RetrievalPolicy
 
 
 class UniversityWorkflow:
@@ -54,3 +55,8 @@ class UniversityWorkflow:
                                          for page in document.pages if page.requires_visual_processing],
                 "visual_run_stats": stats.model_dump(mode="json"),
                 "workflow_prompt": prompt, "suggested_note_roots": roots, **inputs}
+
+    def retrieval_policy(self, vault: Path, prepared: dict[str, Any]) -> RetrievalPolicy:
+        roots = prepared["suggested_note_roots"]
+        return RetrievalPolicy(roots={"concept": roots["concept"], "map": roots["map"],
+                                      "course": roots["course_and_lecture"], "lecture": roots["course_and_lecture"]})

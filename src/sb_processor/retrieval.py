@@ -87,7 +87,8 @@ def _match(note: NoteMetadata, queries: list[str], source_norm: str) -> tuple[st
     return None
 
 
-def retrieve_notes(registry: Registry, source_text: str, candidate_terms: list[str], policy: RetrievalPolicy) -> RetrievalResult:
+def retrieve_notes(registry: Registry, source_text: str, candidate_terms: list[str], policy: RetrievalPolicy,
+                   *, load_bodies: bool = True) -> RetrievalResult:
     """Filter metadata, rank names/aliases, then load only bounded full bodies."""
     source_norm = normalize(source_text)
     candidates: list[CandidateMatch] = []
@@ -108,7 +109,7 @@ def retrieve_notes(registry: Registry, source_text: str, candidate_terms: list[s
     candidates.sort(key=lambda c: (-c.score, type_order.get(c.note_type or "", 9), c.path))
     loaded_bodies: dict[str, str] = {}
     counts: dict[str, int] = {}
-    for candidate in candidates:
+    for candidate in candidates if load_bodies else []:
         kind = candidate.note_type or ""
         if counts.get(kind, 0) >= policy.body_limits.get(kind, 0):
             continue
