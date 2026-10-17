@@ -32,6 +32,20 @@ def test_raw_extraction_preserves_line_positions_for_reflow(tmp_path):
     assert result.pages[0].blocks[0].line_bboxes[0][1] < result.pages[0].blocks[0].line_bboxes[1][1]
 
 
+def test_raw_extraction_records_image_area_for_visual_detection(tmp_path):
+    source = tmp_path / "diagram.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=100, height=100)
+    page.insert_text((10, 15), "Diagram")
+    pixmap = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), False)
+    pixmap.clear_with(0xFFFFFF)
+    page.insert_image(pymupdf.Rect(10, 20, 90, 90), pixmap=pixmap)
+    document.save(source)
+    document.close()
+    result = extract_document(source, "pymupdf")
+    assert result.pages[0].metadata["visual_features"]["image_area_ratio"] > 0.5
+
+
 def test_layout_extraction_keeps_markdown_and_layout_metadata(tmp_path):
     source = tmp_path / "slides.pdf"
     document = pymupdf.open()

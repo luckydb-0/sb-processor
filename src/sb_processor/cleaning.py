@@ -212,6 +212,21 @@ def _reflow_page(page: ExtractedPage) -> None:
             page.cleaning_actions.extend(changes)
 
 
+def _flag_visual_page(page: ExtractedPage) -> None:
+    features = page.metadata.get("visual_features")
+    if not features:
+        return
+    image_heavy = features.get("image_area_ratio", 0) >= 0.15 and features.get("text_characters", 0) <= 300
+    vector_heavy = features.get("large_drawing_area_ratio", 0) >= 0.35 and features.get("text_characters", 0) <= 200
+    if image_heavy or vector_heavy:
+        page.requires_visual_processing = True
+        page.visual_flags = ["low_text_density"]
+        if image_heavy:
+            page.visual_flags.append("large_image_area")
+        if vector_heavy:
+            page.visual_flags.append("large_vector_area")
+
+
 class DocumentCleaner:
     """Return a copy: raw text/blocks and original page numbers remain available."""
 
@@ -258,4 +273,5 @@ class DocumentCleaner:
         for page in pages:
             _reflow_page(page)
             _normalize_clean_typography(page)
+            _flag_visual_page(page)
         return result

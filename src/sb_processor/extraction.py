@@ -40,6 +40,8 @@ class ExtractedPage(BaseModel):
     suppression_reason: str | None = None
     section_title: str | None = None
     cleaning_actions: list[CleaningAction] = Field(default_factory=list)
+    requires_visual_processing: bool = False
+    visual_flags: list[str] = Field(default_factory=list)
 
 
 class ExtractedDocument(BaseModel):
@@ -89,11 +91,29 @@ def _pymupdf_blocks(page: pymupdf.Page) -> list[ExtractedBlock]:
     return blocks
 
 
+def _visual_features(page: pymupdf.Page) -> dict[str, float | int]:
+    area = page.rect.get_area()
+    image_areas = [(pymupdf.Rect(image["bbox"]) & page.rect).get_area() for image in page.get_image_info()]
+    drawing_ratios = [(pymupdf.Rect(drawing["rect"]) & page.rect).get_area() / area
+                      for drawing in page.get_drawings()]
+    # A full-page background rectangle is common in slide templates.
+    meaningful_drawings = [ratio for ratio in drawing_ratios if 0.35 <= ratio <= 0.9]
+    text = page.get_text("text").strip()
+    return {
+        "text_characters": len(text),
+        "image_count": len(image_areas),
+        "image_area_ratio": round(min(1.0, sum(image_areas) / area), 4),
+        "largest_image_area_ratio": round(max(image_areas, default=0) / area, 4),
+        "large_drawing_area_ratio": round(max(meaningful_drawings, default=0), 4),
+    }
+
+
 class RawPyMuPDFExtractor:
     def extract(self, source: Path) -> ExtractedDocument:
         with pymupdf.open(source) as pdf:
             pages = [ExtractedPage(page_number=index, raw_text=page.get_text("text").strip(),
-                                   blocks=_pymupdf_blocks(page), width=page.rect.width, height=page.rect.height)
+                                   blocks=_pymupdf_blocks(page), width=page.rect.width, height=page.rect.height,
+                                   metadata={"visual_features": _visual_features(page)})
                      for index, page in enumerate(pdf, 1)]
             return ExtractedDocument(source=str(source), extractor="pymupdf", page_count=len(pdf), pages=pages,
                                      metadata=dict(pdf.metadata))
@@ -129,7 +149,8 @@ class AnyDocExtractor:
                                            width=page.rect.width, height=page.rect.height,
                                            metadata={"block_positions_available": fallback,
                                                      "anydoc_page_rejected": fallback,
-                                                     "fallback_extractor": "pymupdf" if fallback else None}))
+                                                     "fallback_extractor": "pymupdf" if fallback else None,
+                                                     "visual_features": _visual_features(page)}))
             return ExtractedDocument(source=str(source), extractor="anydoc", page_count=len(pdf), pages=pages,
                                      metadata=dict(pdf.metadata))
 
@@ -148,6 +169,8 @@ class PyMuPDF4LLMExtractor:
         chunks = pymupdf4llm.to_markdown(str(source), page_chunks=True, use_ocr=False, header=True, footer=True)
         layout = json.loads(pymupdf4llm.to_json(str(source), use_ocr=False))
         layout_pages = {page["page_number"]: page for page in layout["pages"]}
+        with pymupdf.open(source) as pdf:
+            visual_features = {index: _visual_features(page) for index, page in enumerate(pdf, 1)}
         pages = []
         for index, chunk in enumerate(chunks, 1):
             number = chunk["metadata"].get("page_number", index)
@@ -173,7 +196,8 @@ class PyMuPDF4LLMExtractor:
                                        width=positioned["width"], height=positioned["height"],
                                        metadata={"page_boxes": chunk.get("page_boxes", []),
                                                  "toc_items": chunk.get("toc_items", []),
-                                                 "full_ocred": positioned.get("full_ocred", False)}))
+                                                 "full_ocred": positioned.get("full_ocred", False),
+                                                 "visual_features": visual_features[number]}))
         return ExtractedDocument(source=str(source), extractor="pymupdf4llm", page_count=layout["page_count"],
                                  pages=pages, metadata={"toc": layout.get("toc", [])})
 
