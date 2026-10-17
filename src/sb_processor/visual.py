@@ -34,7 +34,7 @@ class VisualPageExtractor(Protocol):
 
 
 class OpenAIVisualPageExtractor:
-    def __init__(self, model: str = "gpt-4o-mini", client: Any = None):
+    def __init__(self, model: str = "gpt-4o", client: Any = None):
         if client is None:
             from openai import OpenAI
             client = OpenAI(timeout=60.0, max_retries=1)
