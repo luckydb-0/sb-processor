@@ -259,6 +259,7 @@ class DocumentCleaner:
                 if not block.keep:
                     removed.append(block)
             page.cleaned_text = _remove_block_lines(page.raw_text, removed)
+            page.metadata["cleaning_stage_characters"] = {"after_boilerplate": len(page.cleaned_text)}
 
         previous: list[tuple[int, str]] = []
         for page in pages:
@@ -271,7 +272,11 @@ class DocumentCleaner:
                 previous.append((page.page_number, key))
         _consolidate_running_sections(pages)
         for page in pages:
+            stages = page.metadata["cleaning_stage_characters"]
+            stages["after_sections"] = len(page.cleaned_text or "")
             _reflow_page(page)
+            stages["after_reflow"] = len(page.cleaned_text or "")
             _normalize_clean_typography(page)
+            stages["after_typography"] = len(page.cleaned_text or "")
             _flag_visual_page(page)
         return result
