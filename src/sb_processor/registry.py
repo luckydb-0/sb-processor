@@ -7,7 +7,7 @@ import unicodedata
 from pathlib import Path
 from typing import Iterable
 
-from .models import CandidateMatch, ScannedNote
+from .models import CandidateMatch, NoteMetadata, ScannedNote
 
 _WORD = re.compile(r"\w+", re.UNICODE)
 
@@ -81,6 +81,14 @@ class Registry:
             rows = db.execute("SELECT * FROM notes ORDER BY path").fetchall()
         return [self._note(row) for row in rows]
 
+    def metadata(self) -> list[NoteMetadata]:
+        """Read the cheap index fields only; no note body enters this query."""
+        with self._connect() as db:
+            rows = db.execute("SELECT path, filename, title, note_type, aliases_json, maps_json FROM notes ORDER BY path").fetchall()
+        return [NoteMetadata(path=row["path"], filename=row["filename"], title=row["title"],
+                             note_type=row["note_type"], aliases=json.loads(row["aliases_json"]),
+                             maps=json.loads(row["maps_json"])) for row in rows]
+
     def find_by_type(self, note_type: str) -> list[ScannedNote]:
         with self._connect() as db:
             rows = db.execute("SELECT * FROM notes WHERE note_type=? ORDER BY path", (note_type,)).fetchall()
@@ -100,7 +108,7 @@ class Registry:
         words = lexical_tokens(query)
         results = []
         with self._connect() as db:
-            rows = db.execute("SELECT n.*, GROUP_CONCAT(a.alias_norm, char(31)) AS alias_names FROM notes n LEFT JOIN aliases a ON a.path=n.path GROUP BY n.path").fetchall()
+            rows = db.execute("SELECT n.path, n.filename, n.title, n.title_norm, n.filename_norm, n.note_type, n.aliases_json, n.maps_json, GROUP_CONCAT(a.alias_norm, char(31)) AS alias_names FROM notes n LEFT JOIN aliases a ON a.path=n.path GROUP BY n.path").fetchall()
         for row in rows:
             aliases = set((row["alias_names"] or "").split("\x1f"))
             if key == row["title_norm"]:
@@ -116,7 +124,8 @@ class Registry:
                     continue
                 score = overlap / len(words | name_words)
                 kind = "lexical"
-            results.append(CandidateMatch(path=row["path"], title=row["title"], note_type=row["note_type"], match_kind=kind, score=score))
+            results.append(CandidateMatch(path=row["path"], title=row["title"], note_type=row["note_type"], match_kind=kind, score=score,
+                                          filename=row["filename"], aliases=json.loads(row["aliases_json"]), maps=json.loads(row["maps_json"])))
         return sorted(results, key=lambda m: (-m.score, m.path))[:limit]
 
     def relevant(self, text: str, limit: int = 8) -> list[ScannedNote]:

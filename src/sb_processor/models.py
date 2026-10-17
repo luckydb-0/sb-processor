@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .extraction import ProcessingCompleteness
 
@@ -31,6 +31,18 @@ class CandidateMatch(StrictModel):
     note_type: str | None
     match_kind: str
     score: float
+    filename: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    maps: list[str] = Field(default_factory=list)
+
+
+class NoteMetadata(StrictModel):
+    path: str
+    filename: str
+    title: str
+    note_type: str | None
+    aliases: list[str]
+    maps: list[str]
 
 
 class Action(str, Enum):
