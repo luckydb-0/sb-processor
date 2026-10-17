@@ -224,3 +224,31 @@ def test_invalid_structured_response_does_not_stage(tmp_path):
         process_source(vault_path=vault, source_path=source, staging_path=tmp_path / "stage",
                        database_path=tmp_path / "db.sqlite", workflow=FakeWorkflow(), llm=InvalidLLM())
     assert not (tmp_path / "stage").exists()
+
+
+def test_loose_lexical_candidate_does_not_force_create_review(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / "Dots").mkdir(parents=True)
+    (vault / "Dots" / "Machine Learning.md").write_text("# Machine Learning\nExisting", encoding="utf-8")
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"fixture")
+
+    class Workflow:
+        name = "fixture"
+
+        def prepare(self, source, vault):
+            return {"source_text": "[Page 1]\nTEXT:\nSupervised Learning", "candidate_terms": ["Supervised Learning"]}
+
+    class LLM:
+        def generate_processing_proposal(self, *, context):
+            return LLMProposal(source_summary="Supervised", review_required=[], note_changes=[
+                DraftChange(action=Action.CREATE, note_type="concept", title="Supervised Learning",
+                            target_path="Dots/Supervised Learning.md", reason="Distinct concept",
+                            content="# Supervised Learning", sources=["Page 1"]),
+            ])
+
+    run = process_source(vault_path=vault, source_path=source, staging_path=tmp_path / "stage",
+                         database_path=tmp_path / "db.sqlite", workflow=Workflow(), llm=LLM())
+    change = json.loads((run / "proposal.json").read_text())["note_changes"][0]
+    assert change["action"] == "CREATE"
+    assert change["candidate_existing_notes"][0]["match_kind"] == "lexical"

@@ -2,7 +2,7 @@
 
 A command-line proof of concept for processing sources against an Obsidian vault. It indexes Markdown notes in a disposable SQLite database, extracts and cleans a source PDF, asks an OpenAI model for a Pydantic-validated note proposal, checks target paths and possible matches, and saves drafts for review. It **never writes to the vault**.
 
-The only processing workflow currently implemented is `university`, for one lecture PDF at a time. It reads the University Material Processing Rules, templates, and compact Agent A instructions from the vault at runtime. Those files remain the source of truth for note content; the package's prompt only connects them to its structured schema.
+The only processing workflow currently implemented is `university`, for one lecture PDF at a time. Normal runs use the compact University Processing Instructions and templates from the vault. The long University Material Processing Rules remain reference material and enter a request only when explicitly selected with `--rules`.
 
 ## Setup
 
@@ -41,7 +41,7 @@ python -m sb_processor process --workflow university --source /path/to/lecture.p
 
 `scan` builds `.data/registry.sqlite`; `lookup` searches that database. `process` rebuilds it automatically, so a separate scan is optional before processing. It writes a proposal to `staging/run_<UTC timestamp>_<id>/`, never to the vault. Use `--database` and `--staging` to change those paths, keeping both outside the vault. Review `review.md`, `proposal.json`, and the Markdown under `notes/` before manually using any draft.
 
-The university workflow expects these files under the vault's `+ Inbox` folder: `University Material Processing Rules.md`, `University Templates.md`, and `Agent A - University Compact Processing Instructions.md`. Use `--rules`, `--templates`, and `--instructions` if they live elsewhere. `--model` selects a Structured Outputs capable OpenAI model (default `gpt-4o-mini`).
+The university workflow expects `University Templates.md` and `Agent A - University Compact Processing Instructions.md` under the vault's `+ Inbox` folder. Use `--templates` and `--instructions` if they live elsewhere. `--rules` explicitly replaces the compact instructions with a long rules file; it cannot be combined with `--instructions`. `--model` selects a Structured Outputs capable OpenAI model (default `gpt-4o-mini`).
 
 ## PDF ingestion and extractor comparison
 
@@ -64,21 +64,24 @@ The document's `completeness` object reports `COMPLETE` or `PARTIAL`, flagged pa
 
 The university adapter reports vault-relative note roots to the model. In this vault, the suggested roots are `Atlas/Dots`, `Atlas/Maps`, and `Atlas/Sources/University`; in a vault without an `Atlas/Dots` folder they are `Dots`, `Maps`, and `Sources/University`.
 
+Agent A retrieval first queries SQLite for path, title, filename, type, aliases, and maps without reading note bodies. A workflow policy admits relevant Dots, Maps, and university source notes, then ranks exact, filename, alias, and lexical matches. README, prompts, configuration, staging, and instruction files are excluded as knowledge candidates. Only a capped set of ranked full bodies enters the typed Agent A request. If a body exceeds the size budget, it remains metadata-only and any attempted UPDATE requires review. Retrieval is deterministic: no match does not establish that a concept is new.
+
 Each run contains:
 
 ```text
 proposal.json         validated proposal with actions, matches, and source hashes
 request_context.json  exact non-secret context sent to the model
+context_diagnostics.json  character/token estimates, selected notes, and exclusions
 review.md             readable actions, reasons, candidate matches, staged paths
 notes/                proposed complete Markdown files at their target paths
 conflicts/            duplicate-target drafts when present
 ```
 
-`request_context.json` contains extracted source text and selected vault note content. Keep staging local and private. Review all proposed Markdown and the original note hashes before any later manual copy or future approval workflow.
+`request_context.json` contains page-aware extracted source text and selected vault note content. `context_diagnostics.json` records instruction, template, source, existing-body, candidate-metadata, and total request sizes; which candidate bodies were loaded; and excluded paths. Token count is a characters/4 estimate. Keep staging local and private. Review all proposed Markdown and the original note hashes before any later manual copy or future approval workflow.
 
 ## What the code checks
 
-The registry supports normalized exact title, filename, alias, path, and note-type queries, plus a simple lexical candidate search. Lookup returns possible notes, never a semantic-equivalence decision. A `CREATE` with candidates or an existing target becomes `REVIEW_REQUIRED`. An `UPDATE` becomes `REVIEW_REQUIRED` if its target does not exist or its current body was not sent to the model. Unsafe paths, duplicate targets, and missing Markdown content also require review. All proposals remain staged only, including those marked `CREATE` or `UPDATE`.
+The registry supports normalized exact title, filename, alias, path, and note-type queries, plus a simple lexical candidate search. Lookup returns possible notes, never a semantic-equivalence decision. A `CREATE` with an exact title, filename, or alias collision or an existing target becomes `REVIEW_REQUIRED`; loose lexical overlap stays visible without automatically blocking creation. An `UPDATE` becomes `REVIEW_REQUIRED` if its target does not exist or its full current body was not sent to the model. Unsafe paths, paths outside workflow roots, duplicate targets, and missing Markdown content also require review. With an explicit incomplete-visual override, proposed writes become `REVIEW_REQUIRED`. The model is asked to make explicit `NO_CHANGE` decisions for supplied existing bodies; omissions become review items. All proposals remain staged only.
 
 All three text extractors run locally and accept text-based PDFs. The `anydoc` path explicitly uses `ocr="reject"`; it never invokes anydoc's hosted OCR, which would send a PDF to Firecrawl. Image-only PDFs need OCR before this PoC can process them. Visual enrichment sends only detector-flagged page images to the configured OpenAI API. Sources over 120,000 Agent A context characters are rejected instead of silently truncated. No embeddings, vector database, web app, Agent B execution, or vault write operation is included.
 
@@ -88,6 +91,6 @@ All three text extractors run locally and accept text-based PDFs. The `anydoc` p
 python -m pytest -q
 ```
 
-Tests cover scanning/frontmatter, registry rebuild and matching, safe staging, update checks, PDF extractors, comparison output, completeness gating, selective rendering, caching, failures, and both OpenAI request shapes. They use fake clients for deterministic integration; a live visual run requires a PDF and `OPENAI_API_KEY`.
+Tests cover scanning/frontmatter, policy-aware metadata retrieval, alias and filename ranking, context size bounds, safe staging, update checks, PDF extractors, comparison output, completeness gating, selective rendering, caching, failures, and both OpenAI request shapes. They use fake clients for deterministic integration; a live Agent A run requires a PDF and `OPENAI_API_KEY`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the file map, schemas, SQLite tables, and design choices. The [ingestion v1 technical debt list](docs/technical-debt/ingestion-v1.md) records known follow-up work for Agent A and PDF ingestion.

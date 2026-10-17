@@ -86,7 +86,9 @@ def _match(note: NoteMetadata, queries: list[str], source_norm: str) -> tuple[st
             best = match
     if best:
         return best
-    if any(_phrase_present(name, source_norm) for name in names if len(normalize(name)) >= 3):
+    if any(_phrase_present(alias, source_norm) for alias in note.aliases if len(normalize(alias)) >= 3):
+        return "alias_mention", 0.85
+    if any(_phrase_present(name, source_norm) for name in names[:2] if len(normalize(name)) >= 3):
         return "source_mention", 0.75
     return None
 

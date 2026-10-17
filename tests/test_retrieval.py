@@ -55,3 +55,16 @@ def test_oversized_note_body_stays_metadata_only(tmp_path):
     assert [c.path for c in result.candidates] == ["Dots/Machine Learning.md"]
     assert result.loaded_bodies == {}
     assert result.skipped_bodies == ["Dots/Machine Learning.md"]
+
+
+def test_alias_mention_gets_body_before_loose_title_mentions(tmp_path):
+    vault = tmp_path / "vault"
+    note(vault, "Dots/Machine Learning.md", "# Machine Learning\nBody")
+    note(vault, "Dots/Predictive Classification.md", "---\ntype: concept\naliases: [Classification]\n---\n# Predictive Classification\nBody")
+    registry = Registry(tmp_path / "registry.sqlite")
+    registry.rebuild(scan_vault(vault))
+    result = retrieve_notes(registry, "Machine Learning and Classification", [],
+                            RetrievalPolicy(roots={"concept": "Dots"}, body_limits={"concept": 1}))
+    assert result.candidates[0].path == "Dots/Predictive Classification.md"
+    assert result.candidates[0].match_kind == "alias_mention"
+    assert list(result.loaded_bodies) == ["Dots/Predictive Classification.md"]

@@ -105,7 +105,7 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         if item.target_path in seen_paths:
             reasons.append("Duplicate proposed target path")
         seen_paths.add(item.target_path)
-        if action == Action.CREATE and (target_note or candidates):
+        if action == Action.CREATE and (target_note or any(c.match_kind in ("exact_title", "exact_filename", "alias") for c in candidates)):
             reasons.append("Existing path or candidate note needs equivalence review")
         if action == Action.UPDATE and not target_note:
             reasons.append("UPDATE target does not exist in the current vault")
