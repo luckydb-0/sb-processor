@@ -2,6 +2,7 @@ import pymupdf
 import pytest
 
 from sb_processor.workflows.university import UniversityWorkflow
+from sb_processor.extraction import ExtractedDocument, ExtractedPage
 
 
 def test_university_workflow_extracts_pdf_and_external_rules(tmp_path):
@@ -70,10 +71,31 @@ def test_university_workflow_can_select_anydoc(tmp_path, monkeypatch):
 
     def fake_extract(path, backend):
         calls.append((path, backend))
-        return "# Converted lecture\n"
+        return ExtractedDocument(source=str(path), extractor="anydoc", page_count=1,
+                                 pages=[ExtractedPage(page_number=1, raw_text="# Converted lecture")])
 
-    monkeypatch.setattr("sb_processor.workflows.university.extract_pdf", fake_extract)
+    monkeypatch.setattr("sb_processor.workflows.university.extract_document", fake_extract)
     context = UniversityWorkflow(pdf_extractor="anydoc").prepare(pdf, vault)
-    assert context["source_text"] == "# Converted lecture\n"
+    assert context["source_text"] == "[Page 1]\n# Converted lecture"
     assert context["pdf_extractor"] == "anydoc"
     assert calls == [(pdf, "anydoc")]
+
+
+def test_university_context_uses_cleaned_text_with_page_provenance(tmp_path):
+    vault = tmp_path / "vault"
+    inbox = vault / "+ Inbox"
+    inbox.mkdir(parents=True)
+    for name in ("University Material Processing Rules.md", "University Templates.md", "Agent A - University Compact Processing Instructions.md"):
+        (inbox / name).write_text("input", encoding="utf-8")
+    pdf = tmp_path / "lecture.pdf"
+    document = pymupdf.open()
+    for index in range(1, 5):
+        slide = document.new_page()
+        slide.insert_text((72, 72), f"Unique slide {index}")
+        slide.insert_text((72, 780), "Repeated course footer")
+    document.save(pdf)
+    document.close()
+    context = UniversityWorkflow().prepare(pdf, vault)
+    assert "Repeated course footer" not in context["source_text"]
+    assert "[Page 4]" in context["source_text"]
+    assert "Unique slide 4" in context["source_text"]

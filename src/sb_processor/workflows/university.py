@@ -4,7 +4,9 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from ..pdf import PdfExtractor, extract_pdf
+from ..cleaning import DocumentCleaner
+from ..extraction import extract_document
+from ..pdf import MAX_SOURCE_CHARS, PdfExtractor
 
 
 class UniversityWorkflow:
@@ -31,7 +33,9 @@ class UniversityWorkflow:
                 inputs[name] = Path(path).read_text(encoding="utf-8")
             except FileNotFoundError as exc:
                 raise FileNotFoundError(f"University {name} file missing: {path}; pass --{name}") from exc
-        source_text = extract_pdf(source, self.pdf_extractor)
+        source_text = DocumentCleaner().clean(extract_document(source, self.pdf_extractor)).cleaned_markdown()
+        if len(source_text) > MAX_SOURCE_CHARS:
+            raise ValueError(f"PDF cleaned text exceeds {MAX_SOURCE_CHARS:,} characters; split the source before processing")
         prompt = files("sb_processor").joinpath("prompts/university.md").read_text(encoding="utf-8")
         knowledge_root = vault / "Atlas" if (vault / "Atlas" / "Dots").is_dir() else vault
         roots = {

@@ -24,6 +24,10 @@ def normalize(text: str) -> str:
 def _similar(a: str, b: str) -> bool:
     if a == b:
         return True
+    # Numbered slide titles are content. Only slash-style page counters were
+    # normalized by `normalize`; other differing numbers must not be merged.
+    if re.findall(r"\b\d+\b", a) != re.findall(r"\b\d+\b", b):
+        return False
     if len(a) < 12 or len(b) < 12:
         return False
     return SequenceMatcher(None, a, b).ratio() >= 0.9

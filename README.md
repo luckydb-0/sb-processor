@@ -26,12 +26,15 @@ python -m sb_processor scan --vault ../gd-gdb
 python -m sb_processor lookup 'Guida a Ideaverse'
 python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb
 python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb --pdf-extractor anydoc
-python -m sb_processor compare-pdf --source /path/to/lecture.pdf --output-dir staging/comparisons --vault ../gd-gdb
+python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb --pdf-extractor pymupdf4llm
+python -m sb_processor compare-pdf --source /path/to/lecture.pdf --output-dir output/extraction_comparison --vault ../gd-gdb
 ```
 
 The process command rebuilds the registry automatically. Its default output paths are `.data/registry.sqlite` and `staging/run_<UTC timestamp>_<id>/`. Override with `--database` and `--staging`; both must resolve outside the vault. Use `--model` to select a Structured Outputs capable OpenAI model (default `gpt-4o-mini`). Use `--rules`, `--templates`, and `--instructions` to supply alternate university files. Without overrides, the workflow expects the three files in the vault's `+ Inbox` folder.
 
-`--pdf-extractor` selects `pymupdf` (default: plain text with explicit page markers) or `anydoc` (Markdown with detected structure). The `compare-pdf` command runs both locally without a model or API key and writes `pymupdf.md`, `anydoc.md`, and `summary.md` to a new comparison folder. The summary reports size, word count, page-marker count, and heading count; inspect the Markdown itself before judging quality. `--vault` is required so the command can reject comparison output inside the vault.
+`--pdf-extractor` selects `pymupdf` (default), `anydoc`, or `pymupdf4llm`. Install optional backends with `pip install -e '.[anydoc,layout]'`. The extractor returns numbered pages with raw text, positioned blocks where available, and metadata. A deterministic cleaner removes repeated edge-position headers/footers and page counters, and suppresses later near-duplicate navigation pages. The workflow sends only cleaned text with original `[Page N]` markers to the model. AnyDoc single-page failures fall back to raw PyMuPDF for that page and are recorded in metadata.
+
+`compare-pdf` runs all three backends locally without a model or API key. Each run saves `<extractor>_raw.md`, `<extractor>_clean.md`, `<extractor>_document.json`, `comparison.json`, `comparison.md`, and `cleaning_report.md`. The JSON retains raw page text, block positions, and all cleaning decisions; `anydoc_whole_document.md` preserves the prior whole-document conversion separately because it cannot reliably identify source pages. Character/word savings are measured, while token counts use a rough characters/4 estimate. Inspect representative slides: headings, reading order, tables, diagrams, equations, and bibliography can differ even when word counts look similar. `--vault` is required so output cannot be placed inside the vault.
 
 The university adapter reports vault-relative note roots to the model. In this vault, the suggested roots are `Atlas/Dots`, `Atlas/Maps`, and `Atlas/Sources/University`; in a vault without an `Atlas/Dots` folder they are `Dots`, `Maps`, and `Sources/University`.
 

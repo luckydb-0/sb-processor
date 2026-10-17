@@ -89,6 +89,7 @@ class AnyDocExtractor:
             for index, page in enumerate(pdf, 1):
                 single = pymupdf.open()
                 single.insert_pdf(pdf, from_page=index - 1, to_page=index - 1)
+                fallback = False
                 try:
                     text = anydoc.to_markdown_bytes(single.tobytes(), "pdf", ocr="reject")
                 except anydoc.NeedsOcrError as exc:
@@ -96,15 +97,18 @@ class AnyDocExtractor:
                 except anydoc.UnsupportedError as exc:
                     if "no extractable text" not in str(exc).lower():
                         raise
-                    # AnyDoc can reject a single-page conversion even when the
-                    # source PDF has usable text. Preserve the gap explicitly.
-                    text = ""
+                    # Preserve page content and provenance when AnyDoc's
+                    # single-page converter rejects a visual-heavy slide.
+                    text = page.get_text("text")
+                    fallback = True
                 finally:
                     single.close()
                 pages.append(ExtractedPage(page_number=index, raw_text=text.strip(),
+                                           blocks=_pymupdf_blocks(page) if fallback else [],
                                            width=page.rect.width, height=page.rect.height,
-                                           metadata={"block_positions_available": False,
-                                                     "anydoc_page_rejected": not bool(text.strip())}))
+                                           metadata={"block_positions_available": fallback,
+                                                     "anydoc_page_rejected": fallback,
+                                                     "fallback_extractor": "pymupdf" if fallback else None}))
             return ExtractedDocument(source=str(source), extractor="anydoc", page_count=len(pdf), pages=pages,
                                      metadata=dict(pdf.metadata))
 
@@ -115,6 +119,10 @@ class PyMuPDF4LLMExtractor:
             import pymupdf4llm
         except ImportError as exc:
             raise RuntimeError("pymupdf4llm is missing; install the layout extra") from exc
+        try:
+            pymupdf4llm.use_layout(True)
+        except ImportError as exc:
+            raise RuntimeError("pymupdf-layout is missing; install the layout extra") from exc
         # Keep headers and footers in the raw view; the cleaner makes auditable decisions.
         chunks = pymupdf4llm.to_markdown(str(source), page_chunks=True, use_ocr=False, header=True, footer=True)
         layout = json.loads(pymupdf4llm.to_json(str(source), use_ocr=False))
@@ -125,11 +133,20 @@ class PyMuPDF4LLMExtractor:
             positioned = layout_pages[number]
             blocks = []
             for box in positioned["boxes"]:
-                text = "\n".join("".join(span["text"] for span in line["spans"])
-                                 for line in box.get("textlines", [])).strip()
-                if text:
-                    blocks.append(ExtractedBlock(text=text, bbox=(box["x0"], box["y0"], box["x1"], box["y1"]),
-                                                 block_type=box.get("boxclass", "text")))
+                lines = []
+                for line in box.get("textlines", []):
+                    parts = []
+                    previous_right = None
+                    for span in line.get("spans", []):
+                        left = span.get("bbox", [0])[0]
+                        if previous_right is not None and left - previous_right > max(0.75, span.get("size", 8) * 0.12):
+                            parts.append(" ")
+                        parts.append(span["text"])
+                        previous_right = span.get("bbox", [0, 0, 0])[2]
+                    lines.append("".join(parts))
+                blocks.append(ExtractedBlock(text="\n".join(lines).strip(),
+                                             bbox=(box["x0"], box["y0"], box["x1"], box["y1"]),
+                                             block_type=box.get("boxclass", "text")))
             pages.append(ExtractedPage(page_number=number, raw_text=chunk["text"].strip(), blocks=blocks,
                                        width=positioned["width"], height=positioned["height"],
                                        metadata={"page_boxes": chunk.get("page_boxes", []),

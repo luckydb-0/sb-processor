@@ -105,7 +105,7 @@ def compare_pdf_extractors(source: Path, output_root: Path) -> Path:
                      f"{m['tables_raw']} | {m['removed_blocks']} | {m['repeated_navigation_pages_suppressed']} |")
     lines += ["", "Each raw/clean Markdown file uses `[Page N]` markers. `*_document.json` retains page metadata, raw text, "
               "block positions and cleaning decisions. Counts are diagnostic; inspect reading order, tables, equations, and visuals manually.", "",
-              "Token estimates use characters / 4, not a model tokenizer. See `comparison.json` for stage-level savings and `cleaning_report.md` for decisions.", ""]
+              "Token estimates use characters / 4, not a model tokenizer. In `comparison.json`, `other_deterministic` is the removed `[Page N]` marker overhead for suppressed navigation pages. See `cleaning_report.md` for decisions.", ""]
     (run / "comparison.md").write_text("\n".join(lines), encoding="utf-8")
     (run / "summary.md").write_text("\n".join(lines), encoding="utf-8")
     log.info("Saved PDF extraction comparison at %s", run)
