@@ -60,6 +60,17 @@ def test_cache_avoids_repeated_model_calls(tmp_path):
     assert result.completeness.status == CompletenessStatus.COMPLETE
 
 
+def test_invalid_cache_is_recomputed(tmp_path):
+    source, document = fixture(tmp_path)
+    enrich_visual_pages(document, source, FakeExtractor(), tmp_path / "cache")
+    next((tmp_path / "cache").glob("*.json")).write_text("broken", encoding="utf-8")
+    extractor = FakeExtractor()
+    result, stats = enrich_visual_pages(document, source, extractor, tmp_path / "cache")
+    assert len(extractor.calls) == 1
+    assert stats.cache_hits == 1 and stats.api_calls == 1
+    assert result.completeness.status == CompletenessStatus.COMPLETE
+
+
 def test_failure_or_no_extractor_keeps_document_partial(tmp_path):
     source, document = fixture(tmp_path)
     result, stats = enrich_visual_pages(document, source, FakeExtractor(fail_page=3), tmp_path / "cache")
@@ -69,6 +80,19 @@ def test_failure_or_no_extractor_keeps_document_partial(tmp_path):
     assert result.completeness.status == CompletenessStatus.PARTIAL
     pending, _ = enrich_visual_pages(document, source, None, tmp_path / "cache2")
     assert pending.completeness.unprocessed_visual_pages == [1, 3]
+
+
+def test_ambiguous_or_empty_visual_result_remains_unresolved(tmp_path):
+    source, document = fixture(tmp_path)
+
+    class AmbiguousExtractor(FakeExtractor):
+        def extract(self, image, context):
+            return VisualPageContent(additional_information="Possible arrow", uncertain=context.page_number == 1)
+
+    result, stats = enrich_visual_pages(document, source, AmbiguousExtractor(), tmp_path / "cache")
+    assert result.completeness.unprocessed_visual_pages == [1]
+    assert result.pages[0].visual_error == "ambiguous_visual_result"
+    assert stats.failures == 1
 
 
 def test_openai_adapter_sends_one_image_and_local_context_only():

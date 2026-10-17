@@ -107,9 +107,15 @@ def enrich_visual_pages(document: ExtractedDocument, source: Path, extractor: Vi
                 cached = Path(cache_dir) / f"{cache_key}.json"
                 cache_hit = cached.is_file()
                 if cache_hit:
-                    content = VisualPageContent.model_validate_json(cached.read_text(encoding="utf-8"))
-                    stats.cache_hits += 1
-                else:
+                    try:
+                        content = VisualPageContent.model_validate_json(cached.read_text(encoding="utf-8"))
+                        if content.uncertain or not content.additional_information.strip():
+                            raise ValueError("Cached visual result is unresolved")
+                        stats.cache_hits += 1
+                    except (OSError, ValueError):
+                        cache_hit = False
+                        log.warning("Invalid visual cache entry for page %d; extracting again", page.page_number)
+                if not cache_hit:
                     context = VisualPageContext(page_number=page.page_number, document_title=source.stem,
                                                 section_title=page.section_title,
                                                 extracted_text=page.cleaned_text or "", visual_flags=page.visual_flags)
@@ -126,7 +132,9 @@ def enrich_visual_pages(document: ExtractedDocument, source: Path, extractor: Vi
                 page.visual_error = None
                 if not cache_hit:
                     cached.parent.mkdir(parents=True, exist_ok=True)
-                    cached.write_text(content.model_dump_json(indent=2) + "\n", encoding="utf-8")
+                    temporary = cached.with_name(cached.name + f".{hashlib.sha256(image).hexdigest()[:8]}.tmp")
+                    temporary.write_text(content.model_dump_json(indent=2) + "\n", encoding="utf-8")
+                    temporary.replace(cached)
                 log.info("Visual page %d complete (%s)", page.page_number, "cache" if cache_hit else "extractor")
             except Exception as exc:
                 page.visual_processing_status = VisualProcessingStatus.FAILED
