@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
 import pymupdf
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 ExtractorName = Literal["pymupdf", "anydoc", "pymupdf4llm"]
 
@@ -28,6 +29,33 @@ class CleaningAction(BaseModel):
     block_index: int | None = None
 
 
+class VisualProcessingStatus(str, Enum):
+    NOT_REQUIRED = "NOT_REQUIRED"
+    PENDING = "PENDING"
+    COMPLETE = "COMPLETE"
+    RESOLVED = "RESOLVED"
+    FAILED = "FAILED"
+
+
+class CompletenessStatus(str, Enum):
+    COMPLETE = "COMPLETE"
+    PARTIAL = "PARTIAL"
+
+
+class VisualPageContent(BaseModel):
+    additional_information: str
+    limitations: str = ""
+    uncertain: bool = False
+
+
+class ProcessingCompleteness(BaseModel):
+    status: CompletenessStatus
+    text_extraction_complete: bool
+    visual_pages: list[int]
+    visual_pages_processed: list[int]
+    unprocessed_visual_pages: list[int]
+
+
 class ExtractedPage(BaseModel):
     page_number: int = Field(ge=1)
     raw_text: str
@@ -42,6 +70,9 @@ class ExtractedPage(BaseModel):
     cleaning_actions: list[CleaningAction] = Field(default_factory=list)
     requires_visual_processing: bool = False
     visual_flags: list[str] = Field(default_factory=list)
+    visual_content: VisualPageContent | None = None
+    visual_processing_status: VisualProcessingStatus = VisualProcessingStatus.NOT_REQUIRED
+    visual_error: str | None = None
 
 
 class ExtractedDocument(BaseModel):
@@ -50,6 +81,45 @@ class ExtractedDocument(BaseModel):
     page_count: int
     pages: list[ExtractedPage]
     metadata: dict[str, Any] = Field(default_factory=dict)
+    text_extraction_complete: bool = True
+
+    @computed_field
+    @property
+    def completeness(self) -> ProcessingCompleteness:
+        flagged = [page for page in self.pages if page.requires_visual_processing]
+        processed = [page.page_number for page in flagged if page.visual_processing_status in
+                     (VisualProcessingStatus.COMPLETE, VisualProcessingStatus.RESOLVED)]
+        unresolved = [page.page_number for page in flagged if page.page_number not in processed]
+        return ProcessingCompleteness(
+            status=CompletenessStatus.COMPLETE if self.text_extraction_complete and not unresolved else CompletenessStatus.PARTIAL,
+            text_extraction_complete=self.text_extraction_complete,
+            visual_pages=[page.page_number for page in flagged],
+            visual_pages_processed=processed,
+            unprocessed_visual_pages=unresolved,
+        )
+
+    def agent_markdown(self) -> str:
+        parts = []
+        active_section = None
+        for page in self.pages:
+            if not page.include_in_llm_context:
+                continue
+            content = page.cleaned_text if page.cleaned_text is not None else page.raw_text
+            visual = page.visual_content.additional_information if page.visual_content else ""
+            if not content.strip() and not visual.strip() and not page.requires_visual_processing:
+                continue
+            if page.section_title and page.section_title != active_section:
+                parts.append(f"[Section: {page.section_title}]")
+            lines = [f"[Page {page.page_number}]", "TEXT:", content.strip()]
+            if visual:
+                lines += ["VISUAL CONTENT:", visual.strip()]
+            elif page.requires_visual_processing and page.visual_processing_status not in (
+                VisualProcessingStatus.COMPLETE, VisualProcessingStatus.RESOLVED
+            ):
+                lines += ["VISUAL CONTENT: UNRESOLVED"]
+            parts.append("\n".join(lines))
+            active_section = page.section_title
+        return "\n\n".join(parts)
 
     def raw_markdown(self) -> str:
         return _render(self.pages, cleaned=False)
