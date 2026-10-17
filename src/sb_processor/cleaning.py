@@ -12,6 +12,11 @@ from .extraction import CleaningAction, ExtractedBlock, ExtractedDocument, Extra
 
 COUNTER = re.compile(r"^\s*\d+\s*[/|–-]\s*\d+\s*$")
 NAVIGATION = re.compile(r"\b(agenda|outline|contents|overview|roadmap|course structure|table of contents)\b", re.I)
+TYPOGRAPHY_MAP = str.maketrans({
+    "ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st",
+    "\u00a0": " ", "\u2007": " ", "\u2009": " ", "\u202f": " ",
+    "‐": "-", "‑": "-",
+})
 
 
 def normalize(text: str) -> str:
@@ -145,6 +150,25 @@ def _consolidate_running_sections(pages: list[ExtractedPage]) -> None:
                                                         after="", block_index=block_index))
 
 
+def _normalize_clean_typography(page: ExtractedPage) -> None:
+    if page.cleaned_text is None:
+        return
+    lines = []
+    in_code = False
+    for line in page.cleaned_text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            in_code = not in_code
+            lines.append(line)
+            continue
+        changed = line if in_code else line.translate(TYPOGRAPHY_MAP)
+        if not in_code and not line.lstrip().startswith("|") and not line.startswith("    "):
+            changed = re.sub(r"(?<=\S)[ \t]{2,}", " ", changed)
+        if changed != line:
+            page.cleaning_actions.append(CleaningAction(kind="unicode_normalized", before=line, after=changed))
+        lines.append(changed)
+    page.cleaned_text = "\n".join(lines)
+
+
 class DocumentCleaner:
     """Return a copy: raw text/blocks and original page numbers remain available."""
 
@@ -188,4 +212,6 @@ class DocumentCleaner:
             if _is_navigation(text):
                 previous.append((page.page_number, key))
         _consolidate_running_sections(pages)
+        for page in pages:
+            _normalize_clean_typography(page)
         return result

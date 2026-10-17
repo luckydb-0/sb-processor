@@ -114,3 +114,18 @@ def test_running_section_transition_and_same_named_slide_title():
     assert text.count("[Section: Second section]") == 1
     assert "[Page 4]\nSecond section" in text
     assert clean.pages[3].section_title == "Second section"
+
+
+def test_unicode_ligatures_and_whitespace_normalize_only_in_clean_text():
+    source = document([page(1, "oﬃcial  diﬃcult\u00a0classiﬁcation and ﬂow")])
+    clean = DocumentCleaner().clean(source)
+    assert clean.pages[0].cleaned_text == "official difficult classification and flow"
+    assert source.pages[0].raw_text == "oﬃcial  diﬃcult\u00a0classiﬁcation and ﬂow"
+    assert clean.pages[0].cleaning_actions[0].kind == "unicode_normalized"
+
+
+def test_clean_typography_preserves_math_arrows_greek_and_minus():
+    source = document([page(1, "α − β ⇒ γ; x ≤ 3; semi‑supervised")])
+    clean = DocumentCleaner().clean(source)
+    assert clean.pages[0].cleaned_text == "α − β ⇒ γ; x ≤ 3; semi-supervised"
+    assert "−" in clean.pages[0].cleaned_text
