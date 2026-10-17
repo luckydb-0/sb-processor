@@ -19,7 +19,7 @@ def test_ingest_pdf_accepts_local_benchmark_options():
                                       "--visual-model", "gpt-4o-mini"])
     assert args.visual_model == "gpt-4o-mini"
     default = build_parser().parse_args(["ingest-pdf", "--source", "lecture.pdf", "--vault", "vault"])
-    assert default.visual_model == "gpt-4o"
+    assert default.visual_model == "gpt-5.4"
 
 
 def test_compare_pdf_command_accepts_source():

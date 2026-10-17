@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from .extraction import ExtractedDocument, VisualPageContent, VisualProcessingStatus
 
 log = logging.getLogger(__name__)
-RENDER_SCALE = 1.5
+RENDER_SCALE = 2.0
 
 
 class VisualPageContext(BaseModel):
@@ -34,7 +34,7 @@ class VisualPageExtractor(Protocol):
 
 
 class OpenAIVisualPageExtractor:
-    def __init__(self, model: str = "gpt-4o", client: Any = None):
+    def __init__(self, model: str = "gpt-5.4", client: Any = None):
         if client is None:
             from openai import OpenAI
             client = OpenAI(timeout=60.0, max_retries=1)
@@ -68,6 +68,8 @@ class OpenAIVisualPageExtractor:
 
 class VisualRunStats(BaseModel):
     flagged_pages: list[int]
+    extractor_identity: str | None = None
+    render_scale: float = RENDER_SCALE
     api_calls: int = 0
     cache_hits: int = 0
     failures: int = 0
@@ -86,7 +88,9 @@ def enrich_visual_pages(document: ExtractedDocument, source: Path, extractor: Vi
     """Render and interpret only flagged pages; failed pages stay unresolved."""
     result = document.model_copy(deep=True)
     flagged = [page for page in result.pages if page.requires_visual_processing]
-    stats = VisualRunStats(flagged_pages=[page.page_number for page in flagged])
+    stats = VisualRunStats(flagged_pages=[page.page_number for page in flagged],
+                           extractor_identity=extractor.cache_identity if extractor else None,
+                           render_scale=render_scale)
     if not flagged:
         return result, stats
     for page in flagged:

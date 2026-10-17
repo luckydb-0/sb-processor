@@ -43,6 +43,8 @@ def test_only_flagged_pages_rendered_and_enriched_with_original_numbers(tmp_path
     assert extractor.calls == [1, 3]
     assert stats.flagged_pages == [1, 3]
     assert stats.api_calls == 2
+    assert stats.render_scale == 2.0
+    assert stats.extractor_identity == "fake-v1"
     assert result.completeness.status == CompletenessStatus.COMPLETE
     assert result.pages[1].visual_processing_status == VisualProcessingStatus.NOT_REQUIRED
     assert result.pages[2].visual_content.additional_information == "Diagram on original page 3"
