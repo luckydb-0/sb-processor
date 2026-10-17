@@ -75,3 +75,42 @@ def test_near_duplicate_outline_with_section_change_is_suppressed():
     cleaned = DocumentCleaner().clean(document([first, second, third]))
     assert cleaned.pages[0].include_in_llm_context
     assert cleaned.pages[2].suppression_reason == "repeated_navigation"
+
+
+def section_page(number, section, title):
+    blocks = [ExtractedBlock(text=f"{section}\n{title}", bbox=(10, 2, 90, 40)),
+              ExtractedBlock(text=f"Body for slide {number}.", bbox=(10, 50, 90, 75))]
+    return ExtractedPage(page_number=number, width=100, height=100,
+                         raw_text="\n".join(block.text for block in blocks), blocks=blocks)
+
+
+def test_consecutive_running_section_is_emitted_once_and_keeps_slide_titles():
+    section = "Introduction to Machine Learning"
+    source = document([section_page(i, section, f"Distinct title {i}") for i in range(1, 4)])
+    clean = DocumentCleaner().clean(source)
+    text = clean.cleaned_markdown()
+    assert text.count(f"[Section: {section}]") == 1
+    assert all(page.section_title == section for page in clean.pages)
+    assert all(f"[Page {i}]\nDistinct title {i}" in text for i in range(1, 4))
+    assert source.pages[0].raw_text.startswith(section)
+    assert clean.pages[0].cleaning_actions[0].kind == "running_section_consolidated"
+
+
+def test_sparse_repeated_top_text_is_not_a_running_section():
+    pages = [section_page(1, "Shared label", "First"), page(2, "Interlude"),
+             section_page(3, "Shared label", "Second"), page(4, "Different"),
+             section_page(5, "Shared label", "Third")]
+    clean = DocumentCleaner().clean(document(pages))
+    assert all(page.section_title is None for page in clean.pages)
+    assert clean.cleaned_markdown().count("Shared label") == 3
+
+
+def test_running_section_transition_and_same_named_slide_title():
+    pages = [section_page(i, "First section", f"Title {i}") for i in range(1, 4)]
+    pages += [section_page(i, "Second section", "Second section" if i == 4 else f"Title {i}") for i in range(4, 7)]
+    clean = DocumentCleaner().clean(document(pages))
+    text = clean.cleaned_markdown()
+    assert text.count("[Section: First section]") == 1
+    assert text.count("[Section: Second section]") == 1
+    assert "[Page 4]\nSecond section" in text
+    assert clean.pages[3].section_title == "Second section"

@@ -20,6 +20,13 @@ class ExtractedBlock(BaseModel):
     discard_reason: str | None = None
 
 
+class CleaningAction(BaseModel):
+    kind: str
+    before: str
+    after: str
+    block_index: int | None = None
+
+
 class ExtractedPage(BaseModel):
     page_number: int = Field(ge=1)
     raw_text: str
@@ -30,6 +37,8 @@ class ExtractedPage(BaseModel):
     cleaned_text: str | None = None
     include_in_llm_context: bool = True
     suppression_reason: str | None = None
+    section_title: str | None = None
+    cleaning_actions: list[CleaningAction] = Field(default_factory=list)
 
 
 class ExtractedDocument(BaseModel):
@@ -48,12 +57,16 @@ class ExtractedDocument(BaseModel):
 
 def _render(pages: list[ExtractedPage], *, cleaned: bool) -> str:
     parts = []
+    active_section = None
     for page in pages:
         if cleaned and not page.include_in_llm_context:
             continue
         content = page.cleaned_text if cleaned and page.cleaned_text is not None else page.raw_text
         if content.strip():
+            if cleaned and page.section_title and page.section_title != active_section:
+                parts.append(f"[Section: {page.section_title}]")
             parts.append(f"[Page {page.page_number}]\n{content.strip()}")
+            active_section = page.section_title if cleaned else None
     return "\n\n".join(parts)
 
 

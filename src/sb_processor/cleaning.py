@@ -8,7 +8,7 @@ import unicodedata
 from collections import Counter
 from difflib import SequenceMatcher
 
-from .extraction import ExtractedBlock, ExtractedDocument, ExtractedPage
+from .extraction import CleaningAction, ExtractedBlock, ExtractedDocument, ExtractedPage
 
 COUNTER = re.compile(r"^\s*\d+\s*[/|–-]\s*\d+\s*$")
 NAVIGATION = re.compile(r"\b(agenda|outline|contents|overview|roadmap|course structure|table of contents)\b", re.I)
@@ -87,6 +87,64 @@ def _navigation_similar(a: str, b: str) -> bool:
     return len(shared) >= 12 and len(shared) / len(left | right) >= 0.75
 
 
+def _top_label(page: ExtractedPage) -> tuple[str, str | None, int] | None:
+    if not page.height or not page.cleaned_text:
+        return None
+    for index, block in enumerate(page.blocks):
+        if not block.keep or not block.text.strip() or not block.bbox:
+            continue
+        if block.bbox[1] / page.height > 0.035:
+            return None
+        lines = [line.strip() for line in block.text.splitlines() if line.strip()]
+        label = lines[0]
+        if len(label) < 6 or len(label) > 100 or not re.search(r"[A-Za-z]", label):
+            return None
+        first_clean_line = next((line.strip() for line in page.cleaned_text.splitlines() if line.strip()), "")
+        if normalize(first_clean_line) != normalize(label):
+            return None
+        return label, lines[1] if len(lines) > 1 else None, index
+    return None
+
+
+def _consolidate_running_sections(pages: list[ExtractedPage]) -> None:
+    labels = {i: _top_label(page) for i, page in enumerate(pages)}
+    groups: list[list[int]] = []
+    current: list[int] = []
+    for index, candidate in labels.items():
+        if candidate is None:
+            continue
+        if current:
+            previous = current[-1]
+            intervening = range(previous + 1, index)
+            if (index - previous > 2 or normalize(labels[previous][0]) != normalize(candidate[0])
+                    or any(labels[middle] is not None for middle in intervening)):
+                groups.append(current)
+                current = []
+        current.append(index)
+    if current:
+        groups.append(current)
+
+    for group in groups:
+        if len(group) < 3 or not any(right - left == 1 for left, right in zip(group, group[1:])):
+            continue
+        titles = {normalize(labels[index][1]) for index in group if labels[index][1]}
+        if len(titles) < 2:
+            continue
+        section = labels[group[0]][0]
+        for index in group:
+            page = pages[index]
+            label, _, block_index = labels[index]
+            lines = page.cleaned_text.splitlines()
+            first = next((line_index for line_index, line in enumerate(lines) if line.strip()), None)
+            if first is None or normalize(lines[first]) != normalize(label):
+                continue
+            lines.pop(first)
+            page.cleaned_text = "\n".join(lines).strip()
+            page.section_title = section
+            page.cleaning_actions.append(CleaningAction(kind="running_section_consolidated", before=label,
+                                                        after="", block_index=block_index))
+
+
 class DocumentCleaner:
     """Return a copy: raw text/blocks and original page numbers remain available."""
 
@@ -129,4 +187,5 @@ class DocumentCleaner:
                 page.suppression_reason = "repeated_navigation"
             if _is_navigation(text):
                 previous.append((page.page_number, key))
+        _consolidate_running_sections(pages)
         return result
