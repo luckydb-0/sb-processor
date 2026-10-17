@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 import pymupdf
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 ExtractorName = Literal["pymupdf", "anydoc", "pymupdf4llm"]
 
@@ -55,6 +55,20 @@ class ProcessingCompleteness(BaseModel):
     visual_pages_processed: list[int]
     unprocessed_visual_pages: list[int]
 
+    @model_validator(mode="after")
+    def validate_consistency(self) -> ProcessingCompleteness:
+        flagged = set(self.visual_pages)
+        processed = set(self.visual_pages_processed)
+        unresolved = set(self.unprocessed_visual_pages)
+        if (len(flagged) != len(self.visual_pages) or len(processed) != len(self.visual_pages_processed)
+                or len(unresolved) != len(self.unprocessed_visual_pages)
+                or processed & unresolved or processed | unresolved != flagged):
+            raise ValueError("Visual page lists must partition the flagged source pages")
+        expected = CompletenessStatus.COMPLETE if self.text_extraction_complete and not unresolved else CompletenessStatus.PARTIAL
+        if self.status != expected:
+            raise ValueError("Completeness status conflicts with unresolved pages or text extraction")
+        return self
+
 
 class ExtractedPage(BaseModel):
     page_number: int = Field(ge=1)
@@ -73,6 +87,7 @@ class ExtractedPage(BaseModel):
     visual_content: VisualPageContent | None = None
     visual_processing_status: VisualProcessingStatus = VisualProcessingStatus.NOT_REQUIRED
     visual_error: str | None = None
+    visual_resolution: str | None = None
 
 
 class ExtractedDocument(BaseModel):
@@ -87,8 +102,10 @@ class ExtractedDocument(BaseModel):
     @property
     def completeness(self) -> ProcessingCompleteness:
         flagged = [page for page in self.pages if page.requires_visual_processing]
-        processed = [page.page_number for page in flagged if page.visual_processing_status in
-                     (VisualProcessingStatus.COMPLETE, VisualProcessingStatus.RESOLVED)]
+        processed = [page.page_number for page in flagged if (page.visual_processing_status == VisualProcessingStatus.RESOLVED
+                      and bool(page.visual_resolution and page.visual_resolution.strip()))
+                     or (page.visual_processing_status == VisualProcessingStatus.COMPLETE and page.visual_content is not None
+                         and page.visual_content.additional_information.strip() and not page.visual_content.uncertain)]
         unresolved = [page.page_number for page in flagged if page.page_number not in processed]
         return ProcessingCompleteness(
             status=CompletenessStatus.COMPLETE if self.text_extraction_complete and not unresolved else CompletenessStatus.PARTIAL,
@@ -112,7 +129,8 @@ class ExtractedDocument(BaseModel):
                 parts.append(f"[Section: {page.section_title}]")
             lines = [f"[Page {page.page_number}]", "TEXT:", content.strip()]
             if visual:
-                lines += ["VISUAL CONTENT:", visual.strip()]
+                label = "VISUAL CONTENT:" if page.visual_processing_status == VisualProcessingStatus.COMPLETE else "VISUAL CONTENT (UNRESOLVED):"
+                lines += [label, visual.strip()]
             elif page.requires_visual_processing and page.visual_processing_status not in (
                 VisualProcessingStatus.COMPLETE, VisualProcessingStatus.RESOLVED
             ):

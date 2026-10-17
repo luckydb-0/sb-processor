@@ -81,6 +81,8 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         raise
     changes = []
     review_items = list(draft.review_required)
+    if completeness and completeness.status == CompletenessStatus.PARTIAL:
+        review_items.append(f"Source is PARTIAL; unresolved visual pages: {completeness.unprocessed_visual_pages}")
     safe_paths = []
     seen_paths: set[str] = set()
     for item in draft.note_changes:

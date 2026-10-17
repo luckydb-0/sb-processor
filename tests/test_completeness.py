@@ -20,18 +20,33 @@ def test_no_visual_pages_are_complete():
 
 
 def test_all_visual_pages_processed_are_complete():
-    result = document(page(13, True, VisualProcessingStatus.COMPLETE),
-                      page(14, True, VisualProcessingStatus.RESOLVED)).completeness
+    enriched = page(13, True, VisualProcessingStatus.COMPLETE)
+    enriched.visual_content = VisualPageContent(additional_information="Venn diagram")
+    resolved = page(14, True, VisualProcessingStatus.RESOLVED)
+    resolved.visual_resolution = "Decorative image only; inspected by human"
+    result = document(enriched, resolved).completeness
     assert result.status == CompletenessStatus.COMPLETE
     assert result.visual_pages_processed == [13, 14]
 
 
 def test_pending_or_failed_visual_pages_remain_partial():
-    result = document(page(13, True, VisualProcessingStatus.COMPLETE),
+    enriched = page(13, True, VisualProcessingStatus.COMPLETE)
+    enriched.visual_content = VisualPageContent(additional_information="Flow chart")
+    result = document(enriched,
                       page(14, True, VisualProcessingStatus.FAILED))
     assert result.completeness.status == CompletenessStatus.PARTIAL
     assert result.completeness.unprocessed_visual_pages == [14]
     assert result.model_dump(mode="json")["completeness"]["unprocessed_visual_pages"] == [14]
+
+
+def test_status_without_visual_content_cannot_silently_complete():
+    result = document(page(13, True, VisualProcessingStatus.COMPLETE))
+    assert result.completeness.status == CompletenessStatus.PARTIAL
+
+
+def test_explicit_resolution_needs_audit_reason():
+    result = document(page(13, True, VisualProcessingStatus.RESOLVED))
+    assert result.completeness.unprocessed_visual_pages == [13]
 
 
 def test_visual_content_and_provenance_survive_agent_serialization():

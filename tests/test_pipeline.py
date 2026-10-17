@@ -152,3 +152,4 @@ def test_explicit_override_preserves_partial_status_in_staging(tmp_path):
     assert context["incomplete_visuals_override"] is True
     assert context["document_completeness"]["unprocessed_visual_pages"] == [13]
     assert proposal["source_completeness"]["status"] == "PARTIAL"
+    assert "Source is PARTIAL; unresolved visual pages: [13]" in proposal["review_required"]
