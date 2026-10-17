@@ -59,7 +59,9 @@ PATH_INSTRUCTION = (
     "All target_path values must be relative .md paths within the vault and use the workflow's note roots. "
     "Candidate metadata is evidence for possible equivalence, not proof. A missing deterministic match is not proof "
     "that no equivalent note exists. UPDATE only when the target's complete existing body is supplied; otherwise "
-    "use REVIEW_REQUIRED. Return complete Markdown content for CREATE/UPDATE."
+    "use REVIEW_REQUIRED. For supplied existing-note bodies, explicitly return NO_CHANGE when the source adds no "
+    "useful evidence, UPDATE when it does, or REVIEW_REQUIRED when boundaries remain unclear. Return complete "
+    "Markdown content for CREATE/UPDATE."
 )
 
 

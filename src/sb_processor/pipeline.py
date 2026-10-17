@@ -70,7 +70,8 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
     policy_factory = getattr(workflow, "retrieval_policy", None)
     policy = policy_factory(vault, workflow_context) if callable(policy_factory) else RetrievalPolicy(
         roots=workflow_context.get("suggested_note_roots") or {"concept": "Dots", "map": "Maps"})
-    terms = workflow_context.get("candidate_terms") or source_candidate_terms(workflow_context["source_text"], source.name)
+    terms = list(dict.fromkeys([*workflow_context.get("candidate_terms", []),
+                                *source_candidate_terms(workflow_context["source_text"], source.name)]))
     retrieval = retrieve_notes(registry, workflow_context["source_text"], terms, policy)
     request, diagnostics = build_agent_a_request(workflow.name, source, workflow_context, retrieval)
     context = request.model_dump(mode="json")
@@ -120,5 +121,7 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         change = NoteChange(**item.model_dump(exclude={"action"}), action=action, candidate_existing_notes=candidates, original_content_hash=target_note.content_hash if target_note else None)
         changes.append(change)
         log.info("Proposed action %s for %s -> %s", action.value, item.title, item.target_path)
+    for path in sorted(relevant_paths - seen_paths):
+        review_items.append(f"Existing note body was supplied but no decision returned: {path}")
     proposal = ProcessingProposal(workflow=workflow.name, source=str(source), source_summary=draft.source_summary, vault_note_count=note_count, note_changes=changes, review_required=review_items, source_completeness=completeness)
     return stage_proposal(stage, proposal, context, safe_paths, diagnostics)

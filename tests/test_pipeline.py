@@ -53,6 +53,7 @@ def test_pipeline_stages_proposal_without_changing_vault(tmp_path):
     diagnostics = json.loads((run / "context_diagnostics.json").read_text())
     assert diagnostics["full_note_bodies_loaded"] == 1
     assert diagnostics["total_request_chars"] > diagnostics["source_chars"]
+    assert any("supplied but no decision" in item for item in proposal["review_required"])
 
 
 def test_pipeline_rejects_staging_inside_vault(tmp_path):
