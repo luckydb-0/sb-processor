@@ -28,6 +28,7 @@ def stage_ingestion(document: ExtractedDocument, stats: VisualRunStats, output_r
     run = Path(output_root) / f"ingest_{run_id}"
     run.mkdir(parents=True)
     (run / "document.json").write_text(document.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    (run / "text_raw.md").write_text(document.raw_markdown() + "\n", encoding="utf-8")
     (run / "text_clean.md").write_text(document.cleaned_markdown() + "\n", encoding="utf-8")
     (run / "agent_context.md").write_text(document.agent_markdown() + "\n", encoding="utf-8")
     summary = {
