@@ -156,6 +156,7 @@ def test_explicit_override_preserves_partial_status_in_staging(tmp_path):
     assert context["document_completeness"]["unprocessed_visual_pages"] == [13]
     assert proposal["source_completeness"]["status"] == "PARTIAL"
     assert "Source is PARTIAL; unresolved visual pages: [13]" in proposal["review_required"]
+    assert all(change["action"] == "REVIEW_REQUIRED" for change in proposal["note_changes"])
 
 
 def test_visual_override_does_not_allow_failed_text_extraction(tmp_path):
@@ -206,3 +207,19 @@ def test_pipeline_excludes_unrelated_files_and_long_rules(tmp_path):
     assert [n["path"] for n in request["relevant_existing_notes"]] == ["Dots/Machine Learning.md"]
     assert any(x["path"].endswith("README - Machine Learning.md") for x in diagnostics["excluded"])
     assert any(x["path"].startswith("+ Inbox/") for x in diagnostics["excluded"])
+
+
+def test_invalid_structured_response_does_not_stage(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"fixture")
+
+    class InvalidLLM:
+        def generate_processing_proposal(self, *, context):
+            return {"source_summary": "incomplete", "note_changes": [{"action": "DELETE"}], "review_required": []}
+
+    with pytest.raises(Exception):
+        process_source(vault_path=vault, source_path=source, staging_path=tmp_path / "stage",
+                       database_path=tmp_path / "db.sqlite", workflow=FakeWorkflow(), llm=InvalidLLM())
+    assert not (tmp_path / "stage").exists()

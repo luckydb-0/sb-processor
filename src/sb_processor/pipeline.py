@@ -112,6 +112,8 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
             reasons.append("UPDATE target content was not sent to the model")
         if action in (Action.CREATE, Action.UPDATE) and not item.content.strip():
             reasons.append("CREATE/UPDATE has no Markdown content")
+        if completeness and completeness.status == CompletenessStatus.PARTIAL and action in (Action.CREATE, Action.UPDATE):
+            reasons.append(f"Source is PARTIAL; unresolved visual pages: {completeness.unprocessed_visual_pages}")
         if reasons:
             action = Action.REVIEW_REQUIRED
             review_items.append(f"{item.title}: {'; '.join(reasons)}")

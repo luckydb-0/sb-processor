@@ -50,6 +50,7 @@ class ContextDiagnostics:
     candidate_notes_considered: int
     candidate_notes_selected: int
     full_note_bodies_loaded: int
+    full_note_bodies_skipped: list[str]
     selected: list[dict[str, str]]
     excluded: list[ExcludedNote]
 
@@ -94,7 +95,9 @@ def build_agent_a_request(workflow: str, source: Path, prepared: dict[str, Any],
         estimated_tokens=(len(serialized) + 3) // 4,
         candidate_notes_considered=retrieval.considered, candidate_notes_selected=len(candidates),
         full_note_bodies_loaded=len(retrieval.loaded_bodies),
-        selected=[{"path": c.path, "reason": c.match_kind, "body_loaded": str(c.path in retrieval.loaded_bodies).lower()}
+        full_note_bodies_skipped=retrieval.skipped_bodies,
+        selected=[{"path": c.path, "reason": c.match_kind, "body_loaded": str(c.path in retrieval.loaded_bodies).lower(),
+                   "body_status": "size limit" if c.path in retrieval.skipped_bodies else "selected" if c.path in retrieval.loaded_bodies else "rank limit"}
                   for c in candidates],
         excluded=retrieval.excluded,
     )

@@ -24,6 +24,9 @@ def test_metadata_first_retrieval_filters_and_ranks(tmp_path):
     assert result.candidates[0].path == "Dots/Machine Learning.md"
     assert result.candidates[0].match_kind == "exact_title"
     assert any(c.path == "Dots/Principal Component Analysis.md" and c.match_kind == "alias" for c in result.candidates)
+    filename_result = retrieve_notes(registry, "", ["Principal Component Analysis.md"],
+                                     RetrievalPolicy(roots={"concept": "Dots"}), load_bodies=False)
+    assert filename_result.candidates[0].match_kind == "exact_filename"
     assert not any(c.path == "Maps/Machine Learning.md" and c.note_type == "concept" for c in result.candidates)
     assert set(result.loaded_bodies) == {"Dots/Machine Learning.md", "Dots/Principal Component Analysis.md", "Maps/Machine Learning.md"}
     assert any(x.path.endswith("README - Machine Learning.md") and x.reason == "retrieval policy" for x in result.excluded)
@@ -40,3 +43,15 @@ def test_missing_candidate_is_unknown_and_does_not_load_bodies(tmp_path):
     assert result.candidates == []
     assert result.loaded_bodies == {}
     assert "not proof" in result.limitation
+
+
+def test_oversized_note_body_stays_metadata_only(tmp_path):
+    vault = tmp_path / "vault"
+    note(vault, "Dots/Machine Learning.md", "# Machine Learning\n" + "x" * 200)
+    registry = Registry(tmp_path / "registry.sqlite")
+    registry.rebuild(scan_vault(vault))
+    result = retrieve_notes(registry, "Machine Learning", ["Machine Learning"],
+                            RetrievalPolicy(roots={"concept": "Dots"}, max_body_chars=100))
+    assert [c.path for c in result.candidates] == ["Dots/Machine Learning.md"]
+    assert result.loaded_bodies == {}
+    assert result.skipped_bodies == ["Dots/Machine Learning.md"]

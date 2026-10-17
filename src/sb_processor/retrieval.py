@@ -13,8 +13,11 @@ from .registry import Registry, lexical_tokens, normalize
 class RetrievalPolicy:
     roots: dict[str, str]
     excluded_segments: frozenset[str] = frozenset({"docs", "prompts", "staging", "config", "debug", ".git"})
-    excluded_name_fragments: tuple[str, ...] = ("readme", "agent a", "agent b", "instruction", "protocol", "technical debt", "todo")
+    excluded_name_fragments: tuple[str, ...] = ("readme", "agent a", "agent b", "processing instruction", "processing rules", "config", "technical debt", "todo")
     body_limits: dict[str, int] = field(default_factory=lambda: {"concept": 4, "map": 2, "course": 2, "lecture": 2})
+    max_candidates: int = 30
+    max_body_chars: int = 20_000
+    max_total_body_chars: int = 40_000
 
     def kind(self, note: NoteMetadata) -> str | None:
         parts = note.path.casefold().split("/")
@@ -51,6 +54,7 @@ class RetrievalResult:
     excluded: list[ExcludedNote]
     considered: int
     limitation: str = "No deterministic match is not proof that no equivalent note exists."
+    skipped_bodies: list[str] = field(default_factory=list)
 
 
 def _phrase_present(phrase: str, source_norm: str) -> bool:
@@ -107,8 +111,11 @@ def retrieve_notes(registry: Registry, source_text: str, candidate_terms: list[s
                                          aliases=note.aliases, maps=note.maps, match_kind=match[0], score=match[1]))
     type_order = {"concept": 0, "course": 1, "lecture": 2, "map": 3}
     candidates.sort(key=lambda c: (-c.score, type_order.get(c.note_type or "", 9), c.path))
+    candidates = candidates[:policy.max_candidates]
     loaded_bodies: dict[str, str] = {}
+    skipped_bodies: list[str] = []
     counts: dict[str, int] = {}
+    total_body_chars = 0
     for candidate in candidates if load_bodies else []:
         kind = candidate.note_type or ""
         if counts.get(kind, 0) >= policy.body_limits.get(kind, 0):
@@ -116,9 +123,13 @@ def retrieve_notes(registry: Registry, source_text: str, candidate_terms: list[s
         note = registry.get(candidate.path)
         if note is None:
             continue
+        if len(note.body) > policy.max_body_chars or total_body_chars + len(note.body) > policy.max_total_body_chars:
+            skipped_bodies.append(candidate.path)
+            continue
         loaded_bodies[candidate.path] = note.body
+        total_body_chars += len(note.body)
         counts[kind] = counts.get(kind, 0) + 1
-    return RetrievalResult(candidates, loaded_bodies, excluded, considered)
+    return RetrievalResult(candidates, loaded_bodies, excluded, considered, skipped_bodies=skipped_bodies)
 
 
 def source_candidate_terms(source_text: str, source_name: str) -> list[str]:
