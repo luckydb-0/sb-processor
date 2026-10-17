@@ -26,7 +26,6 @@ class UniversityWorkflow:
         if source.suffix.lower() != ".pdf":
             raise ValueError("University workflow currently accepts one PDF source")
         locations = {
-            "rules": self.rules_path or vault / "+ Inbox" / "University Material Processing Rules.md",
             "templates": self.templates_path or vault / "+ Inbox" / "University Templates.md",
             "instructions": self.instructions_path or vault / "+ Inbox" / "Agent A - University Compact Processing Instructions.md",
         }

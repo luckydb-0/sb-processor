@@ -21,7 +21,7 @@ def test_university_workflow_extracts_pdf_and_external_rules(tmp_path):
     context = UniversityWorkflow().prepare(pdf, vault)
     assert "Principal Component Analysis" in context["source_text"]
     assert "[Page 1]" in context["source_text"]
-    assert context["rules"] == "Full rules"
+    assert "rules" not in context
     assert context["templates"] == "Templates"
     assert context["instructions"] == "Compact instructions"
 
