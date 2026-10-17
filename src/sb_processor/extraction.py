@@ -15,6 +15,7 @@ ExtractorName = Literal["pymupdf", "anydoc", "pymupdf4llm"]
 class ExtractedBlock(BaseModel):
     text: str
     bbox: tuple[float, float, float, float] | None = None
+    line_bboxes: list[tuple[float, float, float, float]] = Field(default_factory=list)
     block_type: str = "text"
     keep: bool = True
     discard_reason: str | None = None
@@ -75,10 +76,17 @@ class DocumentExtractor(Protocol):
 
 
 def _pymupdf_blocks(page: pymupdf.Page) -> list[ExtractedBlock]:
-    return [
-        ExtractedBlock(text=block[4].strip(), bbox=tuple(block[:4]), block_type="text" if block[6] == 0 else "image")
-        for block in page.get_text("blocks") if block[4].strip()
-    ]
+    blocks = []
+    for block in page.get_text("dict")["blocks"]:
+        if block.get("type") != 0:
+            continue
+        lines = ["".join(span["text"] for span in line["spans"]) for line in block.get("lines", [])]
+        text = "\n".join(lines).strip()
+        if not text:
+            continue
+        blocks.append(ExtractedBlock(text=text, bbox=tuple(block["bbox"]),
+                                     line_bboxes=[tuple(line["bbox"]) for line in block["lines"]]))
+    return blocks
 
 
 class RawPyMuPDFExtractor:
@@ -159,6 +167,7 @@ class PyMuPDF4LLMExtractor:
                     lines.append("".join(parts))
                 blocks.append(ExtractedBlock(text="\n".join(lines).strip(),
                                              bbox=(box["x0"], box["y0"], box["x1"], box["y1"]),
+                                             line_bboxes=[tuple(line["bbox"]) for line in box.get("textlines", [])],
                                              block_type=box.get("boxclass", "text")))
             pages.append(ExtractedPage(page_number=number, raw_text=chunk["text"].strip(), blocks=blocks,
                                        width=positioned["width"], height=positioned["height"],

@@ -169,6 +169,49 @@ def _normalize_clean_typography(page: ExtractedPage) -> None:
     page.cleaned_text = "\n".join(lines)
 
 
+def _protected_reflow_line(line: str) -> bool:
+    value = line.strip()
+    return (not value or bool(re.match(r"^(?:#{1,6}\s|[-*•▶]\s?|\d+[.)]\s|\||```|~~~)", value))
+            or bool(re.search(r"[=≤≥∑∫]|\s[+−*/]\s", value)))
+
+
+def _should_join_lines(previous: str, following: str, left: tuple[float, ...],
+                       right: tuple[float, ...], page_width: float) -> bool:
+    if _protected_reflow_line(previous) or _protected_reflow_line(following):
+        return False
+    if len(previous.strip()) < 45 or previous.rstrip().endswith((".", "?", "!", ":", ";", "-")):
+        return False
+    if (left[2] - left[0]) / page_width < 0.60 or not re.match(r"^[a-z]", following.lstrip()):
+        return False
+    indent = abs(left[0] - right[0])
+    return indent <= 4 or (previous.lstrip().startswith("⇒") and 0 <= right[0] - left[0] <= 25)
+
+
+def _reflow_page(page: ExtractedPage) -> None:
+    if not page.cleaned_text or not page.width or not page.height:
+        return
+    for block_index, block in enumerate(page.blocks):
+        if not block.keep or block.block_type != "text" or not block.bbox or block.bbox[1] / page.height < 0.17:
+            continue
+        lines = block.text.splitlines()
+        if len(lines) < 2 or len(lines) != len(block.line_bboxes) or block.text.strip() not in page.cleaned_text:
+            continue
+        result = [lines[0]]
+        changes = []
+        for index in range(1, len(lines)):
+            previous, following = lines[index - 1], lines[index]
+            if _should_join_lines(previous, following, block.line_bboxes[index - 1],
+                                  block.line_bboxes[index], page.width):
+                result[-1] += " " + following.lstrip()
+                changes.append(CleaningAction(kind="paragraph_reflow", before=previous + "\n" + following,
+                                              after=previous.rstrip() + " " + following.lstrip(), block_index=block_index))
+            else:
+                result.append(following)
+        if changes:
+            page.cleaned_text = page.cleaned_text.replace(block.text.strip(), "\n".join(result), 1)
+            page.cleaning_actions.extend(changes)
+
+
 class DocumentCleaner:
     """Return a copy: raw text/blocks and original page numbers remain available."""
 
@@ -213,5 +256,6 @@ class DocumentCleaner:
                 previous.append((page.page_number, key))
         _consolidate_running_sections(pages)
         for page in pages:
+            _reflow_page(page)
             _normalize_clean_typography(page)
         return result

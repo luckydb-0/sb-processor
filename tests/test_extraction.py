@@ -21,6 +21,17 @@ def test_raw_extraction_preserves_numbered_pages_and_positions(tmp_path):
     assert "Second slide" in result.raw_markdown()
 
 
+def test_raw_extraction_preserves_line_positions_for_reflow(tmp_path):
+    source = tmp_path / "wrapped.pdf"
+    document = pymupdf.open()
+    document.new_page().insert_text((72, 72), "A long source line\nA continuation")
+    document.save(source)
+    document.close()
+    result = extract_document(source, "pymupdf")
+    assert len(result.pages[0].blocks[0].line_bboxes) == 2
+    assert result.pages[0].blocks[0].line_bboxes[0][1] < result.pages[0].blocks[0].line_bboxes[1][1]
+
+
 def test_layout_extraction_keeps_markdown_and_layout_metadata(tmp_path):
     source = tmp_path / "slides.pdf"
     document = pymupdf.open()

@@ -129,3 +129,39 @@ def test_clean_typography_preserves_math_arrows_greek_and_minus():
     clean = DocumentCleaner().clean(source)
     assert clean.pages[0].cleaned_text == "α − β ⇒ γ; x ≤ 3; semi-supervised"
     assert "−" in clean.pages[0].cleaned_text
+
+
+def reflow_page(lines, widths, *, separate=False):
+    if separate:
+        blocks = [ExtractedBlock(text=line, bbox=(10, 30 + i * 15, 10 + width, 42 + i * 15),
+                                 line_bboxes=[(10, 30 + i * 15, 10 + width, 42 + i * 15)])
+                  for i, (line, width) in enumerate(zip(lines, widths))]
+    else:
+        blocks = [ExtractedBlock(text="\n".join(lines), bbox=(10, 30, 90, 75),
+                                 line_bboxes=[(10, 30 + i * 15, 10 + width, 42 + i * 15)
+                                              for i, width in enumerate(widths)])]
+    return ExtractedPage(page_number=1, width=100, height=100,
+                         raw_text="\n".join(lines), blocks=blocks)
+
+
+def test_reflow_joins_clear_wrap_inside_one_block():
+    lines = ["This sentence is long enough to wrap near the page margin and", "continues naturally on the next line."]
+    clean = DocumentCleaner().clean(document([reflow_page(lines, [78, 45])]))
+    assert clean.pages[0].cleaned_text == " ".join(lines)
+    assert clean.pages[0].cleaning_actions[0].kind == "paragraph_reflow"
+    assert "\n" in clean.pages[0].raw_text
+
+
+def test_reflow_preserves_bullets_heading_and_equation():
+    cases = [(["• first point with some explanation across the slide", "• second point with more detail"], [78, 70]),
+             (["# Heading", "A paragraph begins here."], [70, 50]),
+             (["E = mc² and α − β ≤ γ", "x + y = z"], [80, 70])]
+    for lines, widths in cases:
+        clean = DocumentCleaner().clean(document([reflow_page(lines, widths)]))
+        assert clean.pages[0].cleaned_text == "\n".join(lines)
+
+
+def test_reflow_does_not_join_across_separate_blocks():
+    lines = ["This sentence is long enough to wrap near the page margin and", "continues naturally on the next line."]
+    clean = DocumentCleaner().clean(document([reflow_page(lines, [78, 45], separate=True)]))
+    assert clean.pages[0].cleaned_text == "\n".join(lines)
