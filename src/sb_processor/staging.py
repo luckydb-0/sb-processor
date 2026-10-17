@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from .models import Action, ProcessingProposal
+
+log = logging.getLogger(__name__)
+
+
+def stage_proposal(staging_path: Path, proposal: ProcessingProposal, context: dict[str, Any], safe_paths: list[bool]) -> Path:
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
+    run = Path(staging_path) / f"run_{run_id}"
+    notes_dir = run / "notes"
+    notes_dir.mkdir(parents=True)
+    (run / "proposal.json").write_text(proposal.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    (run / "request_context.json").write_text(json.dumps(context, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
+    lines = ["# Processing review", "", f"Workflow: `{proposal.workflow}`", f"Source: `{proposal.source}`", f"Vault notes scanned: {proposal.vault_note_count}", "", "No vault files were written.", ""]
+    used: set[str] = set()
+    for index, change in enumerate(proposal.note_changes, 1):
+        lines += [f"## {index}. {change.action.value}: {change.title}", "", f"Target: `{change.target_path}`", f"Reason: {change.reason}", ""]
+        if change.original_content_hash:
+            lines += [f"Existing content SHA-256: `{change.original_content_hash}`", ""]
+        if change.candidate_existing_notes:
+            lines += ["Candidates:", ""]
+            for candidate in change.candidate_existing_notes:
+                lines.append(f"- `{candidate.path}` ({candidate.match_kind}, {candidate.score:.2f})")
+            lines.append("")
+        if safe_paths[index - 1] and change.content.strip() and change.action != Action.NO_CHANGE:
+            if change.target_path not in used:
+                output = notes_dir / change.target_path
+                used.add(change.target_path)
+            else:
+                output = run / "conflicts" / f"draft_{index:03d}.md"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(change.content.rstrip() + "\n", encoding="utf-8")
+            lines += [f"Staged Markdown: `{output.relative_to(run).as_posix()}`", ""]
+    if proposal.review_required:
+        lines += ["## Review items", ""] + [f"- {item}" for item in proposal.review_required] + [""]
+    (run / "review.md").write_text("\n".join(lines), encoding="utf-8")
+    log.info("Staged proposal at %s", run)
+    return run
