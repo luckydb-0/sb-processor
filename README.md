@@ -1,39 +1,60 @@
 # Second Brain processor PoC
 
-A small, source-agnostic processing pipeline for an Obsidian vault. It scans Markdown, builds a disposable SQLite registry, asks an LLM for a Pydantic-validated proposal, checks proposed note paths and deterministic matches, and writes inspection files to staging. It does **not** write to the vault.
+A command-line proof of concept for processing sources against an Obsidian vault. It indexes Markdown notes in a disposable SQLite database, extracts and cleans a source PDF, asks an OpenAI model for a Pydantic-validated note proposal, checks target paths and possible matches, and saves drafts for review. It **never writes to the vault**.
 
-The first workflow reads one university lecture PDF. It loads the existing University Material Processing Rules, templates, and Agent A instructions from the vault at runtime. Those files remain the source of truth for university note content. The package's own university prompt is only a short bridge to the structured schema.
+The only processing workflow currently implemented is `university`, for one lecture PDF at a time. It reads the University Material Processing Rules, templates, and compact Agent A instructions from the vault at runtime. Those files remain the source of truth for note content; the package's prompt only connects them to its structured schema.
 
 ## Setup
 
-From this directory, with Python 3.11 or newer:
+From `sb-processor/`, with Python 3.11 or newer:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[test,anydoc]'
+python -m pip install -e '.[test]'
+```
+
+The default PDF extractor is PyMuPDF. To select the optional extractors, install their extras:
+
+```bash
+python -m pip install -e '.[anydoc,layout]'
+```
+
+`compare-pdf` always runs all three extractors, so it needs **both** extras. Scanning, lookup, local PDF comparison, and `ingest-pdf --skip-visual` do not need an API key. For visual enrichment or `process`, set `OPENAI_API_KEY` in the shell before running the command:
+
+```bash
 export OPENAI_API_KEY='your-key'
 ```
 
-Keep the key in the environment or a local, uncommitted `.env` file. The application reads `OPENAI_API_KEY` through the OpenAI SDK; it does not load or save keys itself. `.env`, `.data/`, and `staging/` are ignored if this directory is placed under Git.
+The application reads this variable through the OpenAI SDK; it does not load `.env` files automatically. `.env`, `.data/`, `staging/`, and `output/` are Git-ignored, but staged files can contain source and vault text, so keep them private.
 
-## Commands
+## Quick start
 
-Run from this directory so the default database and staging paths stay outside the vault:
+Run from `sb-processor/`. The examples use the sibling `gd-gdb` directory as the vault. The default database, cache, and staging paths then stay outside it.
 
 ```bash
 python -m sb_processor scan --vault ../gd-gdb
 python -m sb_processor lookup 'Guida a Ideaverse'
+python -m sb_processor ingest-pdf --source /path/to/lecture.pdf --vault ../gd-gdb --skip-visual
 python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb
-python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb --pdf-extractor anydoc
-python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb --pdf-extractor pymupdf4llm
-python -m sb_processor compare-pdf --source /path/to/lecture.pdf --output-dir output/extraction_comparison --vault ../gd-gdb
-python -m sb_processor ingest-pdf --source /path/to/lecture.pdf --vault ../gd-gdb
 ```
 
-The process command rebuilds the registry automatically. Its default output paths are `.data/registry.sqlite` and `staging/run_<UTC timestamp>_<id>/`. Override with `--database` and `--staging`; both must resolve outside the vault. Use `--model` to select a Structured Outputs capable OpenAI model (default `gpt-4o-mini`). Use `--rules`, `--templates`, and `--instructions` to supply alternate university files. Without overrides, the workflow expects the three files in the vault's `+ Inbox` folder.
+`scan` builds `.data/registry.sqlite`; `lookup` searches that database. `process` rebuilds it automatically, so a separate scan is optional before processing. It writes a proposal to `staging/run_<UTC timestamp>_<id>/`, never to the vault. Use `--database` and `--staging` to change those paths, keeping both outside the vault. Review `review.md`, `proposal.json`, and the Markdown under `notes/` before manually using any draft.
 
-`--pdf-extractor` selects `pymupdf` (default), `anydoc`, or `pymupdf4llm`. Install optional backends with `pip install -e '.[anydoc,layout]'`. The extractor returns numbered pages with raw text, positioned blocks where available, and image/drawing coverage metadata. The deterministic cleaner removes repeated edge-position headers/footers and page counters, suppresses later near-duplicate navigation pages, consolidates contiguous running section labels, normalizes known ligatures and whitespace artefacts, and joins clear wraps within text blocks. Each transformation has an auditable action in the structured document. Original PDF text and page numbers remain intact. AnyDoc single-page failures fall back to raw PyMuPDF for that page and are recorded in metadata.
+The university workflow expects these files under the vault's `+ Inbox` folder: `University Material Processing Rules.md`, `University Templates.md`, and `Agent A - University Compact Processing Instructions.md`. Use `--rules`, `--templates`, and `--instructions` if they live elsewhere. `--model` selects a Structured Outputs capable OpenAI model (default `gpt-4o-mini`).
+
+## PDF ingestion and extractor comparison
+
+Inspect extraction and visual-page detection without generating a note proposal:
+
+```bash
+python -m sb_processor ingest-pdf --source /path/to/lecture.pdf --vault ../gd-gdb
+python -m sb_processor compare-pdf --source /path/to/lecture.pdf --vault ../gd-gdb
+```
+
+`ingest-pdf` uses the visual model only for flagged pages. With no API key or with `--skip-visual`, those pages stay unresolved. `compare-pdf` uses no model or API key; it compares PyMuPDF, AnyDoc, and PyMuPDF4LLM locally. Use `--pdf-extractor anydoc` or `--pdf-extractor pymupdf4llm` with `ingest-pdf` or `process` after installing the corresponding extra.
+
+The extractor returns numbered pages with raw text, positioned blocks where available, and image/drawing coverage metadata. The deterministic cleaner removes repeated edge-position headers/footers and page counters, suppresses later near-duplicate navigation pages, consolidates contiguous running section labels, normalizes known ligatures and whitespace artefacts, and joins clear wraps within text blocks. Each transformation has an auditable action in the structured document. Original PDF text and page numbers remain intact. AnyDoc single-page failures fall back to raw PyMuPDF for that page and are recorded in metadata.
 
 Pages with little extracted text and substantial image or vector coverage receive `requires_visual_processing` and `visual_flags`. `ingest-pdf` renders only those pages and asks an OpenAI vision model to extract additional visible relationships. It stores raw text, cleaned text, and visual descriptions separately under `staging/ingestion/ingest_<id>/` as `document.json`, `text_raw.md`, `text_clean.md`, `agent_context.md`, and `summary.json`. The default visual model is `gpt-5.4`, chosen after the benchmark's nested-oval diagram was misread by smaller models; set `--visual-model` to change it. The model receives one page rendered at 2× and local context. Successful results are cached in `.data/visual_cache` using the source hash, rendered page hash, and model/prompt identity. Output and cache locations must be outside the vault.
 
@@ -69,4 +90,4 @@ python -m pytest -q
 
 Tests cover scanning/frontmatter, registry rebuild and matching, safe staging, update checks, PDF extractors, comparison output, completeness gating, selective rendering, caching, failures, and both OpenAI request shapes. They use fake clients for deterministic integration; a live visual run requires a PDF and `OPENAI_API_KEY`.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the file map, schemas, SQLite tables, and design choices.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the file map, schemas, SQLite tables, and design choices. The [ingestion v1 technical debt list](docs/technical-debt/ingestion-v1.md) records known follow-up work for Agent A and PDF ingestion.
