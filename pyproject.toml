@@ -11,6 +11,7 @@ dependencies = ["pydantic>=2,<3", "PyYAML>=6,<7", "PyMuPDF>=1.24,<2", "openai>=2
 [project.optional-dependencies]
 test = ["pytest>=7,<9"]
 anydoc = ["firecrawl-anydoc>=0.2.4,<1"]
+layout = ["pymupdf4llm>=1.28,<2", "pymupdf-layout>=1.28,<2"]
 
 [project.scripts]
 sb-processor = "sb_processor.cli:main"
