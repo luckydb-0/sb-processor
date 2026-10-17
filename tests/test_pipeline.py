@@ -153,3 +153,22 @@ def test_explicit_override_preserves_partial_status_in_staging(tmp_path):
     assert context["document_completeness"]["unprocessed_visual_pages"] == [13]
     assert proposal["source_completeness"]["status"] == "PARTIAL"
     assert "Source is PARTIAL; unresolved visual pages: [13]" in proposal["review_required"]
+
+
+def test_visual_override_does_not_allow_failed_text_extraction(tmp_path):
+    class FailedTextWorkflow(PartialWorkflow):
+        def prepare(self, source, vault):
+            context = super().prepare(source, vault)
+            context["document_completeness"]["text_extraction_complete"] = False
+            return context
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"fixture")
+    llm = TrackingLLM()
+    with pytest.raises(IncompleteDocumentError):
+        process_source(vault_path=vault, source_path=source, staging_path=tmp_path / "stage",
+                       database_path=tmp_path / "db.sqlite", workflow=FailedTextWorkflow(), llm=llm,
+                       allow_incomplete_visuals=True)
+    assert llm.calls == []

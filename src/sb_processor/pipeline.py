@@ -24,8 +24,9 @@ class Workflow(Protocol):
 class IncompleteDocumentError(ValueError):
     def __init__(self, completeness: ProcessingCompleteness):
         self.completeness = completeness
-        super().__init__(f"Document is PARTIAL; unresolved visual pages: {completeness.unprocessed_visual_pages}. "
-                         "Use --allow-incomplete-visuals only if a qualified proposal is acceptable.")
+        super().__init__(f"Document is PARTIAL; text extraction complete: {completeness.text_extraction_complete}; "
+                         f"unresolved visual pages: {completeness.unprocessed_visual_pages}. "
+                         "Use --allow-incomplete-visuals only for unresolved visual pages and qualified proposals.")
 
 
 def _outside_vault(path: Path, vault: Path) -> bool:
@@ -56,7 +57,9 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
     workflow_context = workflow.prepare(source, vault)
     completeness = (ProcessingCompleteness.model_validate(workflow_context["document_completeness"])
                     if "document_completeness" in workflow_context else None)
-    if completeness and completeness.status == CompletenessStatus.PARTIAL and not allow_incomplete_visuals:
+    if completeness and completeness.status == CompletenessStatus.PARTIAL and (
+        not completeness.text_extraction_complete or not allow_incomplete_visuals
+    ):
         raise IncompleteDocumentError(completeness)
     workflow_context["incomplete_visuals_override"] = bool(
         allow_incomplete_visuals and completeness and completeness.status == CompletenessStatus.PARTIAL)
