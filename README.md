@@ -18,9 +18,11 @@ The default PDF extractor is PyMuPDF. To select the optional extractors, install
 
 ```bash
 python -m pip install -e '.[anydoc,layout]'
+# Optional, substantially larger local layout/table model stack:
+python -m pip install -e '.[docling]'
 ```
 
-`compare-pdf` always runs all three extractors, so it needs **both** extras. Scanning, lookup, local PDF comparison, and `ingest-pdf --skip-visual` do not need an API key. For visual enrichment or `process`, set `OPENAI_API_KEY` in the shell before running the command:
+`compare-pdf` runs the original three extractors by default, so it needs **both** `anydoc` and `layout` extras. Add `--include-docling` after installing its extra. Docling may download local model weights on first use. Scanning, lookup, local PDF comparison, and `ingest-pdf --skip-visual` do not need an API key. For visual enrichment or `process`, set `OPENAI_API_KEY` in the shell before running the command:
 
 ```bash
 export OPENAI_API_KEY='your-key'
@@ -50,9 +52,10 @@ Inspect extraction and visual-page detection without generating a note proposal:
 ```bash
 python -m sb_processor ingest-pdf --source /path/to/lecture.pdf --vault ../gd-gdb
 python -m sb_processor compare-pdf --source /path/to/lecture.pdf --vault ../gd-gdb
+python -m sb_processor compare-pdf --source /path/to/lecture.pdf --vault ../gd-gdb --include-docling
 ```
 
-`ingest-pdf` uses the visual model only for flagged pages. With no API key or with `--skip-visual`, those pages stay unresolved. `compare-pdf` uses no model or API key; it compares PyMuPDF, AnyDoc, and PyMuPDF4LLM locally. Use `--pdf-extractor anydoc` or `--pdf-extractor pymupdf4llm` with `ingest-pdf` or `process` after installing the corresponding extra.
+`ingest-pdf` uses the visual model only for flagged pages. With no API key or with `--skip-visual`, those pages stay unresolved. `compare-pdf` uses no API key; it compares PyMuPDF, AnyDoc, and PyMuPDF4LLM locally, with optional Docling. Use `--pdf-extractor anydoc`, `pymupdf4llm`, or `docling` with `ingest-pdf` or `process` after installing the corresponding extra.
 
 The extractor returns numbered pages with raw text, positioned blocks where available, and image/drawing coverage metadata. The deterministic cleaner removes repeated edge-position headers/footers and page counters, suppresses later near-duplicate navigation pages, consolidates contiguous running section labels, normalizes known ligatures and whitespace artefacts, and joins clear wraps within text blocks. Each transformation has an auditable action in the structured document. Original PDF text and page numbers remain intact. AnyDoc single-page failures fall back to raw PyMuPDF for that page and are recorded in metadata.
 
@@ -60,7 +63,9 @@ Pages with little extracted text and substantial image or vector coverage receiv
 
 The document's `completeness` object reports `COMPLETE` or `PARTIAL`, flagged pages, processed pages, and unresolved pages. A failed, empty, or ambiguous visual response remains unresolved. If the API key is unavailable or `--skip-visual` is set, flagged pages remain `PENDING`. `process` stops before the proposal call on a partial source. To proceed deliberately, pass `--allow-incomplete-visuals`; the staged proposal retains `PARTIAL` and lists unresolved pages for review. The source context preserves original page numbers and labels text and visual content separately. No specialized table fallback runs.
 
-`compare-pdf` runs all three backends locally without a model or API key. Each run saves `<extractor>_raw.md`, `<extractor>_clean.md`, `<extractor>_document.json`, `comparison.json`, `comparison.md`, and `cleaning_report.md`. The JSON retains raw page text, block and line positions, section ranges, visual features, and cleaning decisions; `anydoc_whole_document.md` preserves the prior whole-document conversion separately because it cannot reliably identify source pages. Character/word savings are measured, while token counts use a rough characters/4 estimate. Inspect representative slides: headings, reading order, tables, diagrams, equations, and bibliography can differ even when word counts look similar. `--vault` is required so output cannot be placed inside the vault.
+`compare-pdf` runs the three established backends locally without an API key, plus Docling when requested. Each run saves `<extractor>_raw.md`, `<extractor>_clean.md`, `<extractor>_document.json`, `comparison.json`, `comparison.md`, and `cleaning_report.md`. The JSON retains raw page text, block positions, section ranges, visual features, and cleaning decisions; `anydoc_whole_document.md` preserves the prior whole-document conversion separately because it cannot reliably identify source pages. It also records extraction time and Docling's native item counts. Character/word savings are measured, while token counts use a rough characters/4 estimate. Inspect representative slides: headings, reading order, tables, diagrams, equations, and bibliography can differ even when word counts look similar. `--vault` is required so output cannot be placed inside the vault.
+
+Docling exports page-filtered Markdown and positioned text/table items. The adapter keeps its table Markdown and per-page picture counts, while the existing PyMuPDF visual features continue to drive the completeness gate. A detected picture is **not** treated as a visual interpretation or a resolved visual page. This adapter disables OCR, picture description, chart extraction, and remote services; it sends no document content to a cloud model. Docling's local models can consume considerable disk, memory, and CPU time. PyMuPDF remains the default pending evidence across more PDFs.
 
 The university adapter reports vault-relative note roots to the model. In this vault, the suggested roots are `Atlas/Dots`, `Atlas/Maps`, and `Atlas/Sources/University`; in a vault without an `Atlas/Dots` folder they are `Dots`, `Maps`, and `Sources/University`.
 
@@ -94,7 +99,7 @@ conflicts/                duplicate-target drafts when present
 
 The registry supports normalized exact title, filename, alias, path, and note-type queries, plus lexical candidate search. Retrieval returns possible notes, never a semantic-equivalence decision. A `CREATE` with an exact/alias/normalized-variant collision or an existing target becomes `REVIEW_REQUIRED`; loose lexical and semantic overlap stays visible without automatically blocking creation. An `UPDATE` becomes `REVIEW_REQUIRED` if its target does not exist or its full current body was not sent to the model. An ambiguous concept resolution, conflicting existing path, or broad alias pointing to a narrower existing title also requires review. Unsafe paths, paths outside workflow roots, duplicate targets, and missing Markdown content require review. With an explicit incomplete-visual override, proposed writes become `REVIEW_REQUIRED`. Unresolved wikilinks are reported, not blocked. All proposals remain staged only.
 
-All three text extractors run locally and accept text-based PDFs. The `anydoc` path explicitly uses `ocr="reject"`; it never invokes anydoc's hosted OCR, which would send a PDF to Firecrawl. Image-only PDFs need OCR before this PoC can process them. Visual enrichment sends only detector-flagged page images to the configured OpenAI API. Sources over 120,000 cleaned source characters are rejected instead of silently truncated. There is no web app, Agent B execution, or vault write operation.
+All four text extractors run locally and accept text-based PDFs. The `anydoc` path explicitly uses `ocr="reject"`; it never invokes anydoc's hosted OCR, which would send a PDF to Firecrawl. Image-only PDFs need OCR before this PoC can process them. Visual enrichment sends only detector-flagged page images to the configured OpenAI API. Sources over 120,000 cleaned source characters are rejected instead of silently truncated. There is no web app, Agent B execution, or vault write operation.
 
 ## Tests
 

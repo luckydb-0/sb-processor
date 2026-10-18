@@ -9,7 +9,7 @@ from typing import Literal
 import pymupdf
 
 log = logging.getLogger(__name__)
-PdfExtractor = Literal["pymupdf", "anydoc", "pymupdf4llm"]
+PdfExtractor = Literal["pymupdf", "anydoc", "pymupdf4llm", "docling"]
 MAX_SOURCE_CHARS = 120_000
 
 
@@ -35,7 +35,7 @@ def extract_pdf(source: Path, extractor: PdfExtractor = "pymupdf") -> str:
             result = anydoc.to_markdown(source, ocr="reject")
         except anydoc.NeedsOcrError as exc:
             raise ValueError("PDF needs OCR; anydoc hosted OCR is disabled in this PoC") from exc
-    elif extractor == "pymupdf4llm":
+    elif extractor in ("pymupdf4llm", "docling"):
         from .extraction import extract_document
         result = extract_document(source, extractor).raw_markdown()
     else:
@@ -48,7 +48,7 @@ def extract_pdf(source: Path, extractor: PdfExtractor = "pymupdf") -> str:
     return result
 
 
-def compare_pdf_extractors(source: Path, output_root: Path) -> Path:
+def compare_pdf_extractors(source: Path, output_root: Path, *, include_docling: bool = False) -> Path:
     """Save raw/clean conversions and provenance reports without an LLM call."""
     from .comparison import compare_pdf_extractors as compare
-    return compare(source, output_root)
+    return compare(source, output_root, include_docling=include_docling)

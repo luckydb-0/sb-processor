@@ -57,6 +57,33 @@ def test_comparison_writes_both_extractions_without_llm(tmp_path):
     assert comparison["extractors"]["anydoc"]["whole_document_page_provenance"] is False
 
 
+def test_comparison_can_include_docling_without_requiring_it_by_default(tmp_path, monkeypatch):
+    pytest.importorskip("anydoc")
+    from sb_processor import comparison
+    from sb_processor.extraction import extract_document
+
+    pdf = tmp_path / "lecture.pdf"
+    make_pdf(pdf)
+    original = comparison.extract_document
+
+    def fake_docling(source, extractor):
+        if extractor != "docling":
+            return original(source, extractor)
+        document = extract_document(source, "pymupdf")
+        document.extractor = "docling"
+        document.metadata["docling_conversion_status"] = "success"
+        document.pages[0].metadata["docling_item_counts"] = {"table": 1, "picture": 2}
+        return document
+
+    monkeypatch.setattr(comparison, "extract_document", fake_docling)
+    output = compare_pdf_extractors(pdf, tmp_path / "comparison", include_docling=True)
+    metrics = json.loads((output / "comparison.json").read_text())["extractors"]
+    assert metrics["docling"]["native_item_counts"] == {"table": 1, "picture": 2}
+    assert metrics["docling"]["conversion_status"] == "success"
+    assert (output / "docling_document.json").exists()
+    assert "docling" in (output / "comparison.md").read_text()
+
+
 def test_anydoc_rejects_textless_pdf(tmp_path):
     pytest.importorskip("anydoc")
     pdf = tmp_path / "blank.pdf"

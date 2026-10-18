@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--candidate-top-k", type=int, default=4)
     process.add_argument("--max-discovered-concepts", type=int, default=20)
     process.add_argument("--model", default="gpt-4o-mini")
-    process.add_argument("--pdf-extractor", choices=["pymupdf", "anydoc", "pymupdf4llm"], default="pymupdf")
+    process.add_argument("--pdf-extractor", choices=["pymupdf", "anydoc", "pymupdf4llm", "docling"], default="pymupdf")
     process.add_argument("--visual-model", default="gpt-5.4")
     process.add_argument("--visual-cache", type=Path, default=Path(".data/visual_cache"))
     process.add_argument("--skip-visual", action="store_true", help="Leave detected visual pages unresolved")
@@ -52,13 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--source", type=Path, required=True)
     compare.add_argument("--output-dir", type=Path, default=Path("staging/comparisons"))
     compare.add_argument("--vault", type=Path, required=True, help="Reject comparison output inside this vault")
+    compare.add_argument("--include-docling", action="store_true", help="Include optional local Docling conversion")
     ingest = sub.add_parser("ingest-pdf", help="Extract, clean, and selectively enrich PDF pages without Agent A")
     ingest.add_argument("--source", type=Path, required=True)
     ingest.add_argument("--vault", type=Path, required=True, help="Reject ingestion artifacts inside this vault")
     ingest.add_argument("--output-dir", type=Path, default=Path("staging/ingestion"))
     ingest.add_argument("--visual-cache", type=Path, default=Path(".data/visual_cache"))
     ingest.add_argument("--visual-model", default="gpt-5.4")
-    ingest.add_argument("--pdf-extractor", choices=["pymupdf", "anydoc", "pymupdf4llm"], default="pymupdf")
+    ingest.add_argument("--pdf-extractor", choices=["pymupdf", "anydoc", "pymupdf4llm", "docling"], default="pymupdf")
     ingest.add_argument("--skip-visual", action="store_true", help="Leave detected visual pages unresolved")
     return parser
 
@@ -106,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "compare-pdf":
         if args.output_dir.resolve().is_relative_to(args.vault.resolve(strict=True)):
             parser.error("Comparison output must be outside the vault")
-        run = compare_pdf_extractors(args.source, args.output_dir)
+        run = compare_pdf_extractors(args.source, args.output_dir, include_docling=args.include_docling)
         print(f"Saved comparison: {run}")
     elif args.command == "ingest-pdf":
         _reject_inside_vault(parser, args.vault, args.output_dir, args.visual_cache)

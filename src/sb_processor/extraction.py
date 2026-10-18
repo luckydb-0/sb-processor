@@ -10,7 +10,7 @@ from typing import Any, Literal, Protocol
 import pymupdf
 from pydantic import BaseModel, Field, computed_field, model_validator
 
-ExtractorName = Literal["pymupdf", "anydoc", "pymupdf4llm"]
+ExtractorName = Literal["pymupdf", "anydoc", "pymupdf4llm", "docling"]
 
 
 class ExtractedBlock(BaseModel):
@@ -290,10 +290,81 @@ class PyMuPDF4LLMExtractor:
                                  pages=pages, metadata={"toc": layout.get("toc", [])})
 
 
+class DoclingExtractor:
+    """Use Docling's local layout/table conversion without changing the visual review gate."""
+
+    def _convert(self, source: Path):
+        try:
+            from docling.datamodel.base_models import InputFormat
+            from docling.datamodel.pipeline_options import PdfPipelineOptions
+            from docling.document_converter import DocumentConverter, PdfFormatOption
+        except ImportError as exc:
+            raise RuntimeError("Docling is missing; install the docling extra") from exc
+        options = PdfPipelineOptions(
+            do_ocr=False, do_table_structure=True, enable_remote_services=False,
+            generate_page_images=False, generate_picture_images=False,
+            do_picture_description=False, do_chart_extraction=False,
+        )
+        return DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}).convert(source)
+
+    def extract(self, source: Path) -> ExtractedDocument:
+        result = self._convert(source)
+        status = getattr(result.status, "value", str(result.status)).lower()
+        if status != "success":
+            raise ValueError(f"Docling PDF conversion did not complete: {result.status}")
+        doc = result.document
+        pages = []
+        with pymupdf.open(source) as pdf:
+            for number, pdf_page in enumerate(pdf, 1):
+                # Empty image placeholders add no information to the LLM context.
+                markdown = doc.export_to_markdown(page_no=number, image_placeholder="").strip()
+                blocks = []
+                labels: dict[str, int] = {}
+                pictures: list[dict[str, Any]] = []
+                for item, _level in doc.iterate_items(page_no=number):
+                    label = str(getattr(getattr(item, "label", None), "value", getattr(item, "label", "unknown")))
+                    labels[label] = labels.get(label, 0) + 1
+                    positioned = []
+                    for provenance in getattr(item, "prov", []):
+                        if provenance.page_no == number:
+                            bbox = provenance.bbox.to_top_left_origin(pdf_page.rect.height)
+                            positioned.append((bbox.l, bbox.t, bbox.r, bbox.b))
+                    if label == "picture":
+                        pictures.extend({"bbox": bbox} for bbox in positioned)
+                    content = getattr(item, "text", None)
+                    if label == "table":
+                        content = item.export_to_markdown(doc)
+                    if not content or not str(content).strip():
+                        continue
+                    for bbox in positioned:
+                        blocks.append(ExtractedBlock(
+                            text=str(content).strip(), bbox=bbox, block_type=label,
+                        ))
+                pages.append(ExtractedPage(
+                    page_number=number, raw_text=markdown, blocks=blocks,
+                    width=pdf_page.rect.width, height=pdf_page.rect.height,
+                    metadata={"visual_features": _visual_features(pdf_page),
+                              "docling_item_counts": labels,
+                              "docling_pictures": pictures,
+                              "block_positions_available": bool(blocks)},
+                ))
+            return ExtractedDocument(
+                source=str(source), extractor="docling", page_count=len(pdf), pages=pages,
+                metadata={**dict(pdf.metadata), "docling_conversion_status": status,
+                          "docling_version": _docling_version()},
+            )
+
+
+def _docling_version() -> str:
+    from importlib.metadata import version
+    return version("docling")
+
+
 EXTRACTORS: dict[ExtractorName, DocumentExtractor] = {
     "pymupdf": RawPyMuPDFExtractor(),
     "anydoc": AnyDocExtractor(),
     "pymupdf4llm": PyMuPDF4LLMExtractor(),
+    "docling": DoclingExtractor(),
 }
 
 
