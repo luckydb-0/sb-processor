@@ -84,10 +84,10 @@ class Registry:
     def metadata(self) -> list[NoteMetadata]:
         """Read the cheap index fields only; no note body enters this query."""
         with self._connect() as db:
-            rows = db.execute("SELECT path, filename, title, note_type, aliases_json, maps_json FROM notes ORDER BY path").fetchall()
+            rows = db.execute("SELECT path, filename, title, note_type, aliases_json, maps_json, content_hash FROM notes ORDER BY path").fetchall()
         return [NoteMetadata(path=row["path"], filename=row["filename"], title=row["title"],
                              note_type=row["note_type"], aliases=json.loads(row["aliases_json"]),
-                             maps=json.loads(row["maps_json"])) for row in rows]
+                             maps=json.loads(row["maps_json"]), content_hash=row["content_hash"]) for row in rows]
 
     def find_by_type(self, note_type: str) -> list[ScannedNote]:
         with self._connect() as db:

@@ -43,6 +43,7 @@ class NoteMetadata(StrictModel):
     note_type: str | None
     aliases: list[str]
     maps: list[str]
+    content_hash: str = ""
 
 
 class Action(str, Enum):
