@@ -161,6 +161,7 @@ def build_resolution_request(workflow: str, source: Path, prepared: dict[str, An
                                 excluded=list(excluded.values()), considered=sum(r.considered for r in retrievals),
                                 skipped_bodies=list(dict.fromkeys(skipped)))
     request, diagnostics = build_agent_a_request(workflow, source, prepared, aggregate)
+    request.candidate_existing_notes = []  # Per-candidate evidence below is the sole metadata channel.
     request.source_analysis = analysis
     request.candidate_evidence = [
         {"candidate_name": result.candidate_name,

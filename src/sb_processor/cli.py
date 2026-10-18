@@ -14,6 +14,7 @@ from .vault import scan_vault
 from .workflows.university import UniversityWorkflow
 from .visual import OpenAIVisualPageExtractor
 from .semantic import DEFAULT_EMBEDDING_MODEL
+from .retrieval import DEFAULT_SEMANTIC_THRESHOLD
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--semantic-index", type=Path, default=Path(".data/semantic_qdrant"))
     process.add_argument("--embedding-cache", type=Path, default=Path(".data/models"))
     process.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
-    process.add_argument("--semantic-threshold", type=float, default=0.55)
+    process.add_argument("--semantic-threshold", type=float, default=DEFAULT_SEMANTIC_THRESHOLD)
     process.add_argument("--candidate-top-k", type=int, default=4)
     process.add_argument("--model", default="gpt-4o-mini")
     process.add_argument("--pdf-extractor", choices=["pymupdf", "anydoc", "pymupdf4llm"], default="pymupdf")

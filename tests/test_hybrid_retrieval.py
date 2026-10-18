@@ -63,6 +63,7 @@ def test_semantic_is_evidence_not_merge_and_filters_wrong_types(tmp_path):
     assert all(c.note_type == "concept" for c in result.candidates)
     assert all("README" not in c.path for c in result.candidates)
     assert len(result.loaded_bodies) == 2
+    assert result.semantic_query_count == 1
     assert not hasattr(result, "action")
 
 

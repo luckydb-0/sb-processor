@@ -1,7 +1,7 @@
 import json
 import pytest
 
-from sb_processor.models import Action, CandidateConcept, CandidateMap, DraftChange, LLMProposal, SourceAnalysis
+from sb_processor.models import Action, CandidateConcept, CandidateMap, ConceptRelation, ConceptResolution, DraftChange, LLMProposal, SourceAnalysis
 from sb_processor.pipeline import IncompleteDocumentError, process_source
 from sb_processor.registry import Registry
 from sb_processor.vault import scan_vault
@@ -253,7 +253,9 @@ def test_loose_lexical_candidate_does_not_force_create_review(tmp_path):
 
     class LLM(FakeLLM):
         def generate_processing_proposal(self, *, context):
-            return LLMProposal(source_summary="Supervised", review_required=[], note_changes=[
+            return LLMProposal(source_summary="Supervised", review_required=[], concept_resolutions=[
+                ConceptResolution(candidate_name="Supervised Learning", relation=ConceptRelation.NEW_CONCEPT,
+                                  reason="Distinct from retrieved Machine Learning")], note_changes=[
                 DraftChange(action=Action.CREATE, note_type="concept", title="Supervised Learning",
                             target_path="Dots/Supervised Learning.md", reason="Distinct concept",
                             content="# Supervised Learning", sources=["Page 1"]),

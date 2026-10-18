@@ -8,11 +8,11 @@ from typing import Any, Protocol
 from .llm import LLMClient
 from .agent_a import build_discovery_request, build_resolution_request
 from .extraction import ProcessingCompleteness, CompletenessStatus
-from .models import Action, LLMProposal, NoteChange, NoteMetadata, ProcessingProposal, SourceAnalysis
+from .models import Action, ConceptRelation, LLMProposal, NoteChange, NoteMetadata, ProcessingProposal, SourceAnalysis
 from .registry import Registry
-from .retrieval import RetrievalPolicy, retrieve_candidate, retrieve_notes
+from .retrieval import DEFAULT_SEMANTIC_THRESHOLD, RetrievalPolicy, retrieve_candidate, retrieve_notes
 from .semantic import DEFAULT_EMBEDDING_MODEL, SemanticIndex
-from .staging import stage_proposal
+from .staging import audit_wikilinks, stage_proposal
 from .vault import scan_vault
 
 log = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
                    semantic_index: Any = None, semantic_stats: dict[str, Any] | None = None,
                    semantic_index_path: Path | None = None, embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                    embedding_cache: Path | None = None, candidate_top_k: int = 4,
-                   semantic_threshold: float = 0.55) -> Path:
+                   semantic_threshold: float = DEFAULT_SEMANTIC_THRESHOLD) -> Path:
     vault = Path(vault_path).resolve(strict=True)
     source = Path(source_path).resolve(strict=True)
     stage = Path(staging_path).resolve()
@@ -106,7 +106,7 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         if owned_index is not None:
             owned_index.close()
     if semantic_stats is not None:
-        semantic_stats.update({"query_count": sum(len({r.candidate_name}) for r in retrievals if r.candidate_name != "course context"),
+        semantic_stats.update({"query_count": sum(r.semantic_query_count for r in retrievals),
                                "threshold": semantic_threshold, "top_k_per_candidate": candidate_top_k})
     # Workflow-level course context stays separate from Concept Note equivalence searches.
     course_terms = workflow_context.get("candidate_terms", [])
@@ -135,6 +135,7 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         review_items.append(f"Source is PARTIAL; unresolved visual pages: {completeness.unprocessed_visual_pages}")
     safe_paths = []
     seen_paths: set[str] = set()
+    discovered_names = {candidate.proposed_name.casefold() for candidate in analysis.candidate_concepts}
     for item in draft.note_changes:
         candidates = [c for c in retrieve_notes(registry, "", [item.title], policy, load_bodies=False).candidates
                       if c.note_type == item.note_type]
@@ -159,6 +160,21 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
             reasons.append("UPDATE target content was not sent to the model")
         if action in (Action.CREATE, Action.UPDATE) and not item.content.strip():
             reasons.append("CREATE/UPDATE has no Markdown content")
+        if item.note_type == "concept" and action in (Action.CREATE, Action.UPDATE):
+            resolutions = [r for r in draft.concept_resolutions
+                           if r.candidate_name.casefold() == item.title.casefold() or r.existing_path == item.target_path]
+            if resolutions:
+                relation = resolutions[0].relation
+                if relation == ConceptRelation.AMBIGUOUS:
+                    reasons.append("Conceptual relationship is ambiguous")
+                elif relation == ConceptRelation.NEW_CONCEPT and action == Action.UPDATE:
+                    reasons.append("NEW_CONCEPT resolution conflicts with UPDATE")
+                elif relation == ConceptRelation.EQUIVALENT_EXISTING and action == Action.UPDATE and resolutions[0].existing_path != item.target_path:
+                    reasons.append("Equivalent existing path conflicts with UPDATE target")
+                elif relation == ConceptRelation.RELATED_BUT_DISTINCT and action == Action.UPDATE and resolutions[0].existing_path == item.target_path:
+                    reasons.append("Related but distinct concept cannot be merged automatically")
+            elif item.title.casefold() in discovered_names:
+                reasons.append("No explicit concept resolution returned")
         if completeness and completeness.status == CompletenessStatus.PARTIAL and action in (Action.CREATE, Action.UPDATE):
             reasons.append(f"Source is PARTIAL; unresolved visual pages: {completeness.unprocessed_visual_pages}")
         if reasons:
@@ -169,14 +185,15 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         log.info("Proposed action %s for %s -> %s", action.value, item.title, item.target_path)
     for path in sorted(relevant_paths - seen_paths):
         review_items.append(f"Existing note body was supplied but no decision returned: {path}")
-    discovered_names = {candidate.proposed_name.casefold() for candidate in analysis.candidate_concepts}
     resolved_names = {item.candidate_name.casefold() for item in draft.concept_resolutions}
     for missing in sorted(discovered_names - resolved_names):
         review_items.append(f"No explicit concept resolution returned for discovered candidate: {missing}")
     proposal = ProcessingProposal(workflow=workflow.name, source=str(source), source_summary=draft.source_summary,
                                   vault_note_count=note_count, note_changes=changes, review_required=review_items,
                                   source_completeness=completeness, concept_resolutions=draft.concept_resolutions)
+    wikilinks = audit_wikilinks(changes, registry.metadata())
     return stage_proposal(stage, proposal, context, safe_paths, diagnostics,
                           pass1_context=discovery_context, pass1_diagnostics=discovery_diagnostics,
                           source_analysis=analysis.model_dump(mode="json"),
-                          retrieval_evidence=context["candidate_evidence"], semantic_stats=semantic_stats)
+                          retrieval_evidence=context["candidate_evidence"], semantic_stats=semantic_stats,
+                          wikilink_audit=wikilinks)

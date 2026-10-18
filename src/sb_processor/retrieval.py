@@ -69,11 +69,15 @@ class SemanticObservation:
 class CandidateRetrieval(RetrievalResult):
     candidate_name: str = ""
     semantic_observations: list[SemanticObservation] = field(default_factory=list)
+    semantic_query_count: int = 0
 
 
 class SemanticSearcher(Protocol):
     def search(self, query: str, *, limit: int) -> list:
         ...
+
+
+DEFAULT_SEMANTIC_THRESHOLD = 0.50
 
 
 def _phrase_present(phrase: str, source_norm: str) -> bool:
@@ -168,7 +172,7 @@ def retrieve_notes(registry: Registry, source_text: str, candidate_terms: list[s
 
 def retrieve_candidate(registry: Registry, name: str, aliases: list[str], policy: RetrievalPolicy,
                        semantic: SemanticSearcher | None = None, *, note_type: str = "concept",
-                       top_k: int = 4, threshold: float = 0.55) -> CandidateRetrieval:
+                       top_k: int = 4, threshold: float = DEFAULT_SEMANTIC_THRESHOLD) -> CandidateRetrieval:
     """Retrieve a small evidence set for one discovery candidate, independently of all others."""
     if top_k < 1 or not 0 <= threshold <= 1:
         raise ValueError("top_k must be positive and threshold must be between 0 and 1")
@@ -186,8 +190,10 @@ def retrieve_candidate(registry: Registry, name: str, aliases: list[str], policy
                                          match_kind=kind, score=score, retrieval_methods=[kind],
                                          lexical_score=score if kind == "lexical" else None)
     observations = []
+    semantic_query_count = 0
     if note_type == "concept" and semantic is not None:
         for query in list(dict.fromkeys([name, *aliases]))[:3]:
+            semantic_query_count += 1
             for result in semantic.search(query, limit=max(top_k * 3, 10)):
                 observations.append(SemanticObservation(result.path, result.score, result.score >= threshold))
                 note = allowed.get(result.path)
@@ -219,7 +225,8 @@ def retrieve_candidate(registry: Registry, name: str, aliases: list[str], policy
             loaded[hit.path] = note.body
     return CandidateRetrieval(candidates=selected, loaded_bodies=loaded, excluded=excluded,
                               considered=len(allowed), skipped_bodies=skipped,
-                              candidate_name=name, semantic_observations=observations)
+                              candidate_name=name, semantic_observations=observations,
+                              semantic_query_count=semantic_query_count)
 
 
 def source_candidate_terms(source_text: str, source_name: str) -> list[str]:
