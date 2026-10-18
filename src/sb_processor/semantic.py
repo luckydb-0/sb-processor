@@ -12,8 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from qdrant_client import QdrantClient, models
-
 from .registry import Registry
 from .retrieval import RetrievalPolicy
 
@@ -69,6 +67,9 @@ class SemanticHit:
 class SemanticIndex:
     def __init__(self, path: Path, *, embedder: Embedder | None = None,
                  model_name: str = DEFAULT_EMBEDDING_MODEL, model_cache: Path | None = None):
+        from qdrant_client import QdrantClient, models
+
+        self._models = models
         self.embedder = embedder or FastEmbedder(model_name, model_cache)
         self.path = Path(path)
         self.path.mkdir(parents=True, exist_ok=True)
@@ -122,7 +123,7 @@ class SemanticIndex:
                 updated += 1
         if pending:
             vectors = self.embedder.embed([item[1] for item in pending])
-            self.client.upsert(self.collection, points=[models.PointStruct(
+            self.client.upsert(self.collection, points=[self._models.PointStruct(
                 id=self._id(meta.path), vector=vector,
                 payload={"path": meta.path, "title": meta.title, "aliases": meta.aliases,
                          "note_type": "concept", "content_hash": meta.content_hash})
