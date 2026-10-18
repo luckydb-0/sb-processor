@@ -12,7 +12,9 @@ def test_university_workflow_extracts_pdf_and_external_rules(tmp_path):
     (inbox / "University Material Processing Rules.md").write_text("Full rules", encoding="utf-8")
     (inbox / "University Templates.md").write_text("Templates", encoding="utf-8")
     (inbox / "Agent A - University Compact Processing Instructions.md").write_text("Compact instructions", encoding="utf-8")
-    pdf = tmp_path / "lecture.pdf"
+    source_dir = tmp_path / "Machine Learning"
+    source_dir.mkdir()
+    pdf = source_dir / "lecture.pdf"
     document = pymupdf.open()
     page = document.new_page()
     page.insert_text((72, 72), "Principal Component Analysis")
@@ -21,9 +23,28 @@ def test_university_workflow_extracts_pdf_and_external_rules(tmp_path):
     context = UniversityWorkflow().prepare(pdf, vault)
     assert "Principal Component Analysis" in context["source_text"]
     assert "[Page 1]" in context["source_text"]
-    assert context["rules"] == "Full rules"
+    assert "rules" not in context
     assert context["templates"] == "Templates"
     assert context["instructions"] == "Compact instructions"
+    assert "Machine Learning" in context["candidate_terms"]
+
+
+def test_explicit_long_rules_replace_compact_instructions(tmp_path):
+    vault = tmp_path / "vault"
+    inbox = vault / "+ Inbox"
+    inbox.mkdir(parents=True)
+    (inbox / "University Templates.md").write_text("Templates", encoding="utf-8")
+    (inbox / "Agent A - University Compact Processing Instructions.md").write_text("Compact", encoding="utf-8")
+    rules = tmp_path / "full-rules.md"
+    rules.write_text("Long reference", encoding="utf-8")
+    pdf = tmp_path / "lecture.pdf"
+    document = pymupdf.open()
+    document.new_page().insert_text((72, 72), "Lecture content")
+    document.save(pdf)
+    document.close()
+    context = UniversityWorkflow(rules_path=rules).prepare(pdf, vault)
+    assert context["instructions"] == "Long reference"
+    assert "Compact" not in str(context)
 
 
 def test_university_workflow_detects_atlas_note_roots(tmp_path):

@@ -3,22 +3,26 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .models import Action, ProcessingProposal
+from .agent_a import ContextDiagnostics
 
 log = logging.getLogger(__name__)
 
 
-def stage_proposal(staging_path: Path, proposal: ProcessingProposal, context: dict[str, Any], safe_paths: list[bool]) -> Path:
+def stage_proposal(staging_path: Path, proposal: ProcessingProposal, context: dict[str, Any], safe_paths: list[bool],
+                   diagnostics: ContextDiagnostics) -> Path:
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
     run = Path(staging_path) / f"run_{run_id}"
     notes_dir = run / "notes"
     notes_dir.mkdir(parents=True)
     (run / "proposal.json").write_text(proposal.model_dump_json(indent=2) + "\n", encoding="utf-8")
     (run / "request_context.json").write_text(json.dumps(context, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
+    (run / "context_diagnostics.json").write_text(json.dumps(asdict(diagnostics), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     lines = ["# Processing review", "", f"Workflow: `{proposal.workflow}`", f"Source: `{proposal.source}`", f"Vault notes scanned: {proposal.vault_note_count}", "", "No vault files were written.", ""]
     used: set[str] = set()
     for index, change in enumerate(proposal.note_changes, 1):
@@ -41,6 +45,14 @@ def stage_proposal(staging_path: Path, proposal: ProcessingProposal, context: di
             lines += [f"Staged Markdown: `{output.relative_to(run).as_posix()}`", ""]
     if proposal.review_required:
         lines += ["## Review items", ""] + [f"- {item}" for item in proposal.review_required] + [""]
+    lines += ["## Context diagnostics", "",
+              f"Instructions: {diagnostics.instruction_chars} characters; templates: {diagnostics.template_chars}; source: {diagnostics.source_chars}; existing note bodies: {diagnostics.existing_note_chars}",
+              f"Candidates considered: {diagnostics.candidate_notes_considered}; selected: {diagnostics.candidate_notes_selected}; full bodies loaded: {diagnostics.full_note_bodies_loaded}",
+              f"Serialized request: {diagnostics.total_request_chars} characters (~{diagnostics.estimated_tokens} tokens)", ""]
+    if diagnostics.selected:
+        lines += ["Selected candidates:", ""] + [f"- `{item['path']}`: {item['reason']}; body loaded: {item['body_loaded']}" for item in diagnostics.selected] + [""]
+    if diagnostics.excluded:
+        lines += ["Excluded by retrieval policy:", ""] + [f"- `{item.path}`: {item.reason}" for item in diagnostics.excluded] + [""]
     (run / "review.md").write_text("\n".join(lines), encoding="utf-8")
     log.info("Staged proposal at %s", run)
     return run

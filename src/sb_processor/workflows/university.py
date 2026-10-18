@@ -8,6 +8,7 @@ from ..extraction import extract_document
 from ..ingestion import ingest_pdf
 from ..pdf import MAX_SOURCE_CHARS, PdfExtractor
 from ..visual import VisualPageExtractor
+from ..retrieval import RetrievalPolicy
 
 
 class UniversityWorkflow:
@@ -25,10 +26,11 @@ class UniversityWorkflow:
         source = Path(source)
         if source.suffix.lower() != ".pdf":
             raise ValueError("University workflow currently accepts one PDF source")
+        if self.rules_path and self.instructions_path:
+            raise ValueError("Select either --rules or --instructions, not both")
         locations = {
-            "rules": self.rules_path or vault / "+ Inbox" / "University Material Processing Rules.md",
             "templates": self.templates_path or vault / "+ Inbox" / "University Templates.md",
-            "instructions": self.instructions_path or vault / "+ Inbox" / "Agent A - University Compact Processing Instructions.md",
+            "instructions": self.instructions_path or self.rules_path or vault / "+ Inbox" / "Agent A - University Compact Processing Instructions.md",
         }
         inputs = {}
         for name, path in locations.items():
@@ -49,9 +51,15 @@ class UniversityWorkflow:
             "course_and_lecture": (knowledge_root / "Sources" / "University").relative_to(vault).as_posix(),
         }
         return {"source_text": source_text, "pdf_extractor": self.pdf_extractor,
+                "candidate_terms": [source.parent.name],
                 "document_completeness": document.completeness.model_dump(mode="json"),
                 "visual_page_statuses": [{"page_number": page.page_number, "status": page.visual_processing_status.value,
                                           "flags": page.visual_flags, "error": page.visual_error}
                                          for page in document.pages if page.requires_visual_processing],
                 "visual_run_stats": stats.model_dump(mode="json"),
                 "workflow_prompt": prompt, "suggested_note_roots": roots, **inputs}
+
+    def retrieval_policy(self, vault: Path, prepared: dict[str, Any]) -> RetrievalPolicy:
+        roots = prepared["suggested_note_roots"]
+        return RetrievalPolicy(roots={"concept": roots["concept"], "map": roots["map"],
+                                      "course": roots["course_and_lecture"], "lecture": roots["course_and_lecture"]})
