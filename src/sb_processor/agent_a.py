@@ -10,7 +10,7 @@ from typing import Any
 from pydantic import Field
 
 from .extraction import ProcessingCompleteness
-from .models import CandidateMatch, SourceAnalysis, StrictModel
+from .models import CandidateConcept, CandidateImportance, CandidateMatch, SourceAnalysis, StrictModel
 from .retrieval import CandidateRetrieval, ExcludedNote, RetrievalResult
 
 
@@ -52,6 +52,7 @@ class AgentADiscoveryRequest(StrictModel):
     workflow_prompt: str = ""
     candidate_terms: list[str] = Field(default_factory=list)
     workflow_required_note_types: list[str] = Field(default_factory=list)
+    max_candidate_concepts: int = 20
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,7 @@ PATH_INSTRUCTION = (
 )
 
 
-def build_discovery_request(workflow: str, source: Path, prepared: dict[str, Any]
+def build_discovery_request(workflow: str, source: Path, prepared: dict[str, Any], *, max_candidate_concepts: int = 20
                             ) -> tuple[AgentADiscoveryRequest, ContextDiagnostics]:
     request = AgentADiscoveryRequest(
         workflow=workflow,
@@ -94,6 +95,7 @@ def build_discovery_request(workflow: str, source: Path, prepared: dict[str, Any
         workflow_prompt=prepared.get("workflow_prompt", ""),
         candidate_terms=prepared.get("candidate_terms", []),
         workflow_required_note_types=prepared.get("required_note_types", []),
+        max_candidate_concepts=max_candidate_concepts,
     )
     serialized = json.dumps(request.model_dump(mode="json"), ensure_ascii=False)
     return request, ContextDiagnostics(
@@ -102,6 +104,19 @@ def build_discovery_request(workflow: str, source: Path, prepared: dict[str, Any
         candidate_metadata_chars=0, total_request_chars=len(serialized), estimated_tokens=(len(serialized)+3)//4,
         candidate_notes_considered=0, candidate_notes_selected=0, full_note_bodies_loaded=0,
         full_note_bodies_skipped=[], selected=[], excluded=[])
+
+
+def select_analysis_candidates(analysis: SourceAnalysis, *, max_concepts: int
+                               ) -> tuple[SourceAnalysis, list[CandidateConcept]]:
+    """Bound Pass 2 explicitly; prioritize the model's reusable-concept importance labels."""
+    if max_concepts < 1:
+        raise ValueError("max_concepts must be positive")
+    candidates = analysis.candidate_concepts
+    priority = {CandidateImportance.HIGH: 0, CandidateImportance.MEDIUM: 1, CandidateImportance.LOW: 2}
+    chosen_indices = set(sorted(range(len(candidates)), key=lambda i: (priority[candidates[i].importance], i))[:max_concepts])
+    selected = [candidate for i, candidate in enumerate(candidates) if i in chosen_indices]
+    omitted = [candidate for i, candidate in enumerate(candidates) if i not in chosen_indices]
+    return analysis.model_copy(update={"candidate_concepts": selected}), omitted
 
 
 def build_agent_a_request(workflow: str, source: Path, prepared: dict[str, Any],

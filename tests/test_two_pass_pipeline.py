@@ -89,3 +89,39 @@ def test_ambiguous_resolution_cannot_stage_automatic_update(tmp_path):
     proposal = json.loads((run / "proposal.json").read_text())
     assert proposal["note_changes"][0]["action"] == "REVIEW_REQUIRED"
     assert any("ambiguous" in item.lower() for item in proposal["review_required"])
+
+
+def test_broad_alias_does_not_auto_merge_narrower_title(tmp_path):
+    class ClassificationLLM:
+        def analyze_source(self, *, context):
+            return SourceAnalysis(source_identity="lecture", candidate_concepts=[
+                CandidateConcept(proposed_name="Classification", source_pages=[1], reason="Task family")],
+                candidate_maps=[], source_level_observations=[])
+
+        def generate_processing_proposal(self, *, context):
+            assert context["candidate_evidence"][0]["retrieved"][0]["match_kind"] == "alias"
+            return LLMProposal(source_summary="Classification", review_required=[], concept_resolutions=[
+                ConceptResolution(candidate_name="Classification", relation=ConceptRelation.EQUIVALENT_EXISTING,
+                                  existing_path="Dots/Predictive Classification.md", reason="Alias")], note_changes=[
+                DraftChange(action=Action.UPDATE, note_type="concept", title="Predictive Classification",
+                            target_path="Dots/Predictive Classification.md", reason="Merge", content="# Predictive Classification\nUpdated",
+                            sources=["Page 1"])])
+
+    class ClassificationWorkflow(Workflow):
+        def prepare(self, source, vault):
+            context = super().prepare(source, vault)
+            context["source_text"] = "[Page 1]\nTEXT:\nClassification"
+            return context
+
+    vault = tmp_path / "vault"
+    (vault / "Dots").mkdir(parents=True)
+    (vault / "Dots" / "Predictive Classification.md").write_text(
+        "---\naliases: [Classification]\n---\n# Predictive Classification\nExisting")
+    source = tmp_path / "lecture.pdf"
+    source.write_bytes(b"fixture")
+    run = process_source(vault_path=vault, source_path=source, staging_path=tmp_path / "stage",
+                         database_path=tmp_path / "registry.sqlite", workflow=ClassificationWorkflow(),
+                         llm=ClassificationLLM())
+    change = json.loads((run / "proposal.json").read_text())["note_changes"][0]
+    assert change["action"] == "REVIEW_REQUIRED"
+    assert "scope" in str(json.loads((run / "proposal.json").read_text())["review_required"]).lower()

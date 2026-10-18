@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sb_processor.agent_a import build_discovery_request
+from sb_processor.agent_a import build_discovery_request, select_analysis_candidates
 from sb_processor.llm import OpenAILLMClient
 from sb_processor.models import SourceAnalysis
 
@@ -56,3 +56,15 @@ def test_openai_discovery_uses_structured_output():
     assert result.source_identity == "lecture"
     assert responses.kwargs["text_format"] is SourceAnalysis
     assert responses.kwargs["store"] is False
+
+
+def test_discovery_cap_keeps_high_importance_and_reports_omissions():
+    analysis = SourceAnalysis.model_validate({"source_identity": "fixture", "candidate_maps": [],
+        "source_level_observations": [], "candidate_concepts": [
+            {"proposed_name": "Small example", "reason": "Example", "importance": "LOW"},
+            {"proposed_name": "Data Mining", "reason": "Core", "importance": "HIGH"},
+            {"proposed_name": "Classification", "reason": "Task family", "importance": "HIGH"},
+            {"proposed_name": "Minor detail", "reason": "Detail", "importance": "LOW"}]})
+    selected, omitted = select_analysis_candidates(analysis, max_concepts=2)
+    assert [c.proposed_name for c in selected.candidate_concepts] == ["Data Mining", "Classification"]
+    assert [c.proposed_name for c in omitted] == ["Small example", "Minor detail"]

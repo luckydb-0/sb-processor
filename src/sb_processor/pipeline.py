@@ -6,10 +6,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from .llm import LLMClient
-from .agent_a import build_discovery_request, build_resolution_request
+from .agent_a import build_discovery_request, build_resolution_request, select_analysis_candidates
 from .extraction import ProcessingCompleteness, CompletenessStatus
 from .models import Action, ConceptRelation, LLMProposal, NoteChange, NoteMetadata, ProcessingProposal, SourceAnalysis
-from .registry import Registry
+from .registry import Registry, lexical_tokens
 from .retrieval import DEFAULT_SEMANTIC_THRESHOLD, RetrievalPolicy, retrieve_candidate, retrieve_notes
 from .semantic import DEFAULT_EMBEDDING_MODEL, SemanticIndex
 from .staging import audit_wikilinks, stage_proposal
@@ -51,7 +51,8 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
                    semantic_index: Any = None, semantic_stats: dict[str, Any] | None = None,
                    semantic_index_path: Path | None = None, embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                    embedding_cache: Path | None = None, candidate_top_k: int = 4,
-                   semantic_threshold: float = DEFAULT_SEMANTIC_THRESHOLD) -> Path:
+                   semantic_threshold: float = DEFAULT_SEMANTIC_THRESHOLD,
+                   max_discovered_concepts: int = 20) -> Path:
     vault = Path(vault_path).resolve(strict=True)
     source = Path(source_path).resolve(strict=True)
     stage = Path(staging_path).resolve()
@@ -81,13 +82,16 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
     policy_factory = getattr(workflow, "retrieval_policy", None)
     policy = policy_factory(vault, workflow_context) if callable(policy_factory) else RetrievalPolicy(
         roots=workflow_context.get("suggested_note_roots") or {"concept": "Dots", "map": "Maps"})
-    discovery_request, discovery_diagnostics = build_discovery_request(workflow.name, source, workflow_context)
+    discovery_request, discovery_diagnostics = build_discovery_request(
+        workflow.name, source, workflow_context, max_candidate_concepts=max_discovered_concepts)
     discovery_context = discovery_request.model_dump(mode="json")
     try:
         analysis = SourceAnalysis.model_validate(llm.analyze_source(context=discovery_context))
     except Exception:
         log.exception("Structured source discovery or validation failed")
         raise
+    selected_analysis, omitted_concepts = select_analysis_candidates(
+        analysis, max_concepts=max_discovered_concepts)
     owned_index = None
     try:
         if semantic_index is None and semantic_index_path is not None:
@@ -98,13 +102,13 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         retrievals = [retrieve_candidate(registry, candidate.proposed_name, candidate.aliases_or_terms_seen,
                                          policy, semantic_index, top_k=candidate_top_k,
                                          threshold=semantic_threshold)
-                      for candidate in analysis.candidate_concepts]
+                      for candidate in selected_analysis.candidate_concepts]
         retrievals.extend(retrieve_candidate(registry, candidate.proposed_name, [], policy, None,
                                              note_type="map", top_k=candidate_top_k)
-                          for candidate in analysis.candidate_maps)
+                      for candidate in selected_analysis.candidate_maps)
         retrievals.extend(retrieve_candidate(registry, candidate.proposed_name, [], policy, None,
                                              note_type=candidate.note_type, top_k=candidate_top_k)
-                          for candidate in analysis.source_note_candidates
+                          for candidate in selected_analysis.source_note_candidates
                           if candidate.note_type in policy.roots)
     finally:
         if owned_index is not None:
@@ -122,11 +126,11 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         if course_result.candidates:
             from .retrieval import CandidateRetrieval
             retrievals.append(CandidateRetrieval(**vars(course_result), candidate_name="course context"))
-    request, diagnostics = build_resolution_request(workflow.name, source, workflow_context, analysis, retrievals)
+    request, diagnostics = build_resolution_request(workflow.name, source, workflow_context, selected_analysis, retrievals)
     context = request.model_dump(mode="json")
     relevant_paths = {path for result in retrievals for path in result.loaded_bodies}
     log.info("Pass 1: %d concepts; Pass 2: %d candidates, %d bodies, %d request characters",
-             len(analysis.candidate_concepts), diagnostics.candidate_notes_selected,
+             len(selected_analysis.candidate_concepts), diagnostics.candidate_notes_selected,
              len(relevant_paths), diagnostics.total_request_chars)
     try:
         draft = LLMProposal.model_validate(llm.generate_processing_proposal(context=context))
@@ -139,7 +143,7 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         review_items.append(f"Source is PARTIAL; unresolved visual pages: {completeness.unprocessed_visual_pages}")
     safe_paths = []
     seen_paths: set[str] = set()
-    discovered_names = {candidate.proposed_name.casefold() for candidate in analysis.candidate_concepts}
+    discovered_names = {candidate.proposed_name.casefold() for candidate in selected_analysis.candidate_concepts}
     for item in draft.note_changes:
         candidates = [c for c in retrieve_notes(registry, "", [item.title], policy, load_bodies=False).candidates
                       if c.note_type == item.note_type]
@@ -175,6 +179,14 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
                     reasons.append("NEW_CONCEPT resolution conflicts with UPDATE")
                 elif relation == ConceptRelation.EQUIVALENT_EXISTING and action == Action.UPDATE and resolutions[0].existing_path != item.target_path:
                     reasons.append("Equivalent existing path conflicts with UPDATE target")
+                elif relation == ConceptRelation.EQUIVALENT_EXISTING and action == Action.UPDATE and target_note:
+                    name_words = lexical_tokens(resolutions[0].candidate_name)
+                    title_words = lexical_tokens(target_note.title)
+                    alias_only = any(result.candidate_name.casefold() == resolutions[0].candidate_name.casefold()
+                                     and any(hit.path == item.target_path and hit.match_kind == "alias"
+                                             for hit in result.candidates) for result in retrievals)
+                    if alias_only and name_words and name_words < title_words:
+                        reasons.append("Alias matches a narrower existing title; conceptual scope needs review")
                 elif relation == ConceptRelation.RELATED_BUT_DISTINCT and action == Action.UPDATE and resolutions[0].existing_path == item.target_path:
                     reasons.append("Related but distinct concept cannot be merged automatically")
             elif item.title.casefold() in discovered_names:
@@ -192,6 +204,8 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
     resolved_names = {item.candidate_name.casefold() for item in draft.concept_resolutions}
     for missing in sorted(discovered_names - resolved_names):
         review_items.append(f"No explicit concept resolution returned for discovered candidate: {missing}")
+    if omitted_concepts:
+        review_items.append(f"{len(omitted_concepts)} discovery candidates omitted by context cap; see discovery_selection.json")
     proposed_types = {item.note_type for item in draft.note_changes}
     for missing in sorted(set(workflow_context.get("required_note_types", [])) - proposed_types):
         review_items.append(f"Workflow-required note type omitted from proposal: {missing}")
@@ -204,5 +218,8 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
     return stage_proposal(stage, proposal, context, safe_paths, diagnostics,
                           pass1_context=discovery_context, pass1_diagnostics=discovery_diagnostics,
                           source_analysis=analysis.model_dump(mode="json"),
+                          discovery_selection={"max_candidate_concepts": max_discovered_concepts,
+                                               "selected": [c.proposed_name for c in selected_analysis.candidate_concepts],
+                                               "omitted": [c.proposed_name for c in omitted_concepts]},
                           retrieval_evidence=retrieval_audit, semantic_stats=semantic_stats,
                           wikilink_audit=wikilinks)

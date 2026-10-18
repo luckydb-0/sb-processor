@@ -44,6 +44,7 @@ def audit_wikilinks(changes: list[DraftChange], metadata: list[NoteMetadata]) ->
 def stage_proposal(staging_path: Path, proposal: ProcessingProposal, context: dict[str, Any], safe_paths: list[bool],
                    diagnostics: ContextDiagnostics, *, pass1_context: dict[str, Any] | None = None,
                    pass1_diagnostics: ContextDiagnostics | None = None, source_analysis: dict[str, Any] | None = None,
+                   discovery_selection: dict[str, Any] | None = None,
                    retrieval_evidence: list[dict[str, Any]] | None = None,
                    semantic_stats: dict[str, Any] | None = None,
                    wikilink_audit: list[dict[str, str]] | None = None) -> Path:
@@ -60,6 +61,8 @@ def stage_proposal(staging_path: Path, proposal: ProcessingProposal, context: di
         (run / "pass1_diagnostics.json").write_text(json.dumps(asdict(pass1_diagnostics), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if source_analysis is not None:
         (run / "source_analysis.json").write_text(json.dumps(source_analysis, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if discovery_selection is not None:
+        (run / "discovery_selection.json").write_text(json.dumps(discovery_selection, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if retrieval_evidence is not None:
         (run / "retrieval_evidence.json").write_text(json.dumps(retrieval_evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if semantic_stats is not None:
@@ -93,6 +96,10 @@ def stage_proposal(staging_path: Path, proposal: ProcessingProposal, context: di
         for item in proposal.concept_resolutions:
             lines.append(f"- **{item.candidate_name}**: {item.relation.value}; existing: `{item.existing_path or 'none'}`; {item.reason}")
         lines.append("")
+    if discovery_selection is not None:
+        lines += ["## Discovery selection", "", f"Selected {len(discovery_selection['selected'])} of {len(discovery_selection['selected']) + len(discovery_selection['omitted'])} candidate concepts (cap {discovery_selection['max_candidate_concepts']}).", ""]
+        if discovery_selection["omitted"]:
+            lines += ["Omitted for review: " + ", ".join(discovery_selection["omitted"]), ""]
     lines += ["## Context diagnostics", "",
               f"Instructions: {diagnostics.instruction_chars} characters; templates: {diagnostics.template_chars}; source: {diagnostics.source_chars}; existing note bodies: {diagnostics.existing_note_chars}",
               f"Candidates considered: {diagnostics.candidate_notes_considered}; selected: {diagnostics.candidate_notes_selected}; full bodies loaded: {diagnostics.full_note_bodies_loaded}",

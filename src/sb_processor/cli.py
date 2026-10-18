@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
     process.add_argument("--semantic-threshold", type=float, default=DEFAULT_SEMANTIC_THRESHOLD)
     process.add_argument("--candidate-top-k", type=int, default=4)
+    process.add_argument("--max-discovered-concepts", type=int, default=20)
     process.add_argument("--model", default="gpt-4o-mini")
     process.add_argument("--pdf-extractor", choices=["pymupdf", "anydoc", "pymupdf4llm"], default="pymupdf")
     process.add_argument("--visual-model", default="gpt-5.4")
@@ -99,7 +100,8 @@ def main(argv: list[str] | None = None) -> int:
                              allow_incomplete_visuals=args.allow_incomplete_visuals,
                              semantic_index_path=args.semantic_index, embedding_cache=args.embedding_cache,
                              embedding_model=args.embedding_model,
-                             semantic_threshold=args.semantic_threshold, candidate_top_k=args.candidate_top_k)
+                             semantic_threshold=args.semantic_threshold, candidate_top_k=args.candidate_top_k,
+                             max_discovered_concepts=args.max_discovered_concepts)
         print(f"Staged proposal: {run}")
     elif args.command == "compare-pdf":
         if args.output_dir.resolve().is_relative_to(args.vault.resolve(strict=True)):

@@ -56,11 +56,18 @@ class Action(str, Enum):
     REVIEW_REQUIRED = "REVIEW_REQUIRED"
 
 
+class CandidateImportance(str, Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
 class CandidateConcept(StrictModel):
     proposed_name: str
     aliases_or_terms_seen: list[str] = Field(default_factory=list)
     source_pages: list[int] = Field(default_factory=list)
     reason: str
+    importance: CandidateImportance = CandidateImportance.MEDIUM
 
 
 class CandidateMap(StrictModel):
