@@ -17,6 +17,7 @@ def test_metadata_first_retrieval_filters_and_ranks(tmp_path):
     note(vault, "Dots/GitHub/README - Machine Learning.md", "# Machine Learning\nUnrelated body")
     note(vault, "+ Inbox/Agent A - Machine Learning.md", "# Machine Learning\nPrompt body")
     note(vault, "docs/Machine Learning.md", "# Machine Learning\nDocs body")
+    note(vault, "config/Machine Learning.md", "# Machine Learning\nConfiguration body")
     registry = Registry(tmp_path / "registry.sqlite")
     registry.rebuild(scan_vault(vault))
     result = retrieve_notes(registry, "Machine Learning and PCA", ["Machine Learning", "PCA"],
@@ -32,6 +33,7 @@ def test_metadata_first_retrieval_filters_and_ranks(tmp_path):
     assert any(x.path.endswith("README - Machine Learning.md") and x.reason == "retrieval policy" for x in result.excluded)
     assert any(x.path.startswith("+ Inbox/") and x.reason == "retrieval policy" for x in result.excluded)
     assert any(x.path.startswith("docs/") and x.reason == "retrieval policy" for x in result.excluded)
+    assert any(x.path.startswith("config/") and x.reason == "retrieval policy" for x in result.excluded)
 
 
 def test_missing_candidate_is_unknown_and_does_not_load_bodies(tmp_path):
