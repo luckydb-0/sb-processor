@@ -320,27 +320,32 @@ class DoclingExtractor:
                 markdown = doc.export_to_markdown(page_no=number, image_placeholder="").strip()
                 blocks = []
                 labels: dict[str, int] = {}
+                pictures: list[dict[str, Any]] = []
                 for item, _level in doc.iterate_items(page_no=number):
                     label = str(getattr(getattr(item, "label", None), "value", getattr(item, "label", "unknown")))
                     labels[label] = labels.get(label, 0) + 1
+                    positioned = []
+                    for provenance in getattr(item, "prov", []):
+                        if provenance.page_no == number:
+                            bbox = provenance.bbox.to_top_left_origin(pdf_page.rect.height)
+                            positioned.append((bbox.l, bbox.t, bbox.r, bbox.b))
+                    if label == "picture":
+                        pictures.extend({"bbox": bbox} for bbox in positioned)
                     content = getattr(item, "text", None)
                     if label == "table":
                         content = item.export_to_markdown(doc)
                     if not content or not str(content).strip():
                         continue
-                    for provenance in getattr(item, "prov", []):
-                        if provenance.page_no != number:
-                            continue
-                        bbox = provenance.bbox.to_top_left_origin(pdf_page.rect.height)
+                    for bbox in positioned:
                         blocks.append(ExtractedBlock(
-                            text=str(content).strip(),
-                            bbox=(bbox.l, bbox.t, bbox.r, bbox.b), block_type=label,
+                            text=str(content).strip(), bbox=bbox, block_type=label,
                         ))
                 pages.append(ExtractedPage(
                     page_number=number, raw_text=markdown, blocks=blocks,
                     width=pdf_page.rect.width, height=pdf_page.rect.height,
                     metadata={"visual_features": _visual_features(pdf_page),
                               "docling_item_counts": labels,
+                              "docling_pictures": pictures,
                               "block_positions_available": bool(blocks)},
                 ))
             return ExtractedDocument(

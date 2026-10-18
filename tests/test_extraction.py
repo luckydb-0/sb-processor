@@ -95,7 +95,11 @@ def test_docling_preserves_pages_tables_pictures_and_visual_gate(tmp_path, monke
     source = tmp_path / "slides.pdf"
     pdf = pymupdf.open()
     pdf.new_page(width=200, height=100).insert_text((10, 20), "First page")
-    pdf.new_page(width=200, height=100).insert_text((10, 20), "Second page")
+    second = pdf.new_page(width=200, height=100)
+    second.insert_text((10, 20), "Second page")
+    pixmap = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), False)
+    pixmap.clear_with(0xFFFFFF)
+    second.insert_image(pymupdf.Rect(10, 30, 190, 95), pixmap=pixmap)
     pdf.save(source)
     pdf.close()
 
@@ -125,11 +129,17 @@ def test_docling_preserves_pages_tables_pictures_and_visual_gate(tmp_path, monke
     result = extract_document(source, "docling")
     assert [page.page_number for page in result.pages] == [1, 2]
     assert result.pages[1].metadata["docling_item_counts"] == {"table": 1, "picture": 1}
+    assert result.pages[1].metadata["docling_pictures"] == [{"bbox": (10, 15, 70, 30)}]
     assert result.pages[1].blocks[0].bbox == (10, 15, 70, 30)
     assert result.pages[1].blocks[0].block_type == "table"
     assert "[Page 2]" in result.agent_markdown()
     assert "| 1 | 2 |" in result.agent_markdown()
-    assert result.completeness.status.value == "COMPLETE"
+    from sb_processor.cleaning import DocumentCleaner
+    cleaned = DocumentCleaner().clean(result)
+    assert cleaned.completeness.status.value == "PARTIAL"
+    assert cleaned.completeness.unprocessed_visual_pages == [2]
+    assert "[Page 2]" in cleaned.agent_markdown()
+    assert "VISUAL CONTENT: UNRESOLVED" in cleaned.agent_markdown()
 
 
 def test_docling_rejects_incomplete_conversion(tmp_path, monkeypatch):
