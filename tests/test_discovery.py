@@ -79,3 +79,10 @@ def test_explicit_definition_heading_survives_discovery_cap():
     assert selected.candidate_concepts[0].proposed_name == "Data Set"
     assert selected.candidate_concepts[0].source_pages == [50]
     assert [c.proposed_name for c in omitted] == ["Other Topic"]
+
+
+def test_open_ended_question_is_not_promoted_to_concept():
+    analysis = SourceAnalysis(source_identity="fixture", candidate_concepts=[],
+                              candidate_maps=[], source_level_observations=[])
+    enriched = enrich_definition_candidates(analysis, "[Page 34]\nTEXT:\nWhat is typical cell phone usage of this customer segment?")
+    assert enriched.candidate_concepts == []

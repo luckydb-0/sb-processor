@@ -131,7 +131,7 @@ def enrich_definition_candidates(analysis: SourceAnalysis, source_text: str) -> 
         if marker:
             page = int(marker.group(1))
             continue
-        heading = re.fullmatch(r"(?i)What is (?:an? |the )?(.{3,70}?)\?", line.strip())
+        heading = re.fullmatch(r"(?i)What is (?:an? |the )(.{3,70}?)\?", line.strip())
         if heading is None:
             continue
         term = heading.group(1).strip()

@@ -168,6 +168,8 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
             reasons.append("Existing path or candidate note needs equivalence review")
         if action == Action.UPDATE and not target_note:
             reasons.append("UPDATE target does not exist in the current vault")
+        if action == Action.NO_CHANGE and not target_note:
+            reasons.append("NO_CHANGE target does not exist in the current vault")
         if action == Action.UPDATE and target_note and item.target_path not in relevant_paths:
             reasons.append("UPDATE target content was not sent to the model")
         if action in (Action.CREATE, Action.UPDATE) and not item.content.strip():

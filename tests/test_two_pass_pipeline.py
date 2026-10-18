@@ -125,3 +125,22 @@ def test_broad_alias_does_not_auto_merge_narrower_title(tmp_path):
     change = json.loads((run / "proposal.json").read_text())["note_changes"][0]
     assert change["action"] == "REVIEW_REQUIRED"
     assert "scope" in str(json.loads((run / "proposal.json").read_text())["review_required"]).lower()
+
+
+def test_no_change_without_existing_target_requires_review(tmp_path):
+    class MissingLLM(LLM):
+        def generate_processing_proposal(self, *, context):
+            return LLMProposal(source_summary="none", review_required=[], concept_resolutions=[
+                ConceptResolution(candidate_name="Data Mining", relation=ConceptRelation.NEW_CONCEPT,
+                                  reason="No note")], note_changes=[
+                DraftChange(action=Action.NO_CHANGE, note_type="concept", title="Data Mining",
+                            target_path="Dots/Data Mining.md", reason="No change", content="", sources=[])])
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    source = tmp_path / "lecture.pdf"
+    source.write_bytes(b"fixture")
+    run = process_source(vault_path=vault, source_path=source, staging_path=tmp_path / "stage",
+                         database_path=tmp_path / "registry.sqlite", workflow=Workflow(), llm=MissingLLM())
+    proposal = json.loads((run / "proposal.json").read_text())
+    assert proposal["note_changes"][0]["action"] == "REVIEW_REQUIRED"
