@@ -38,6 +38,18 @@ class AgentARequest(StrictModel):
     path_instruction: str
 
 
+class AgentADiscoveryRequest(StrictModel):
+    workflow: str
+    source_metadata: dict[str, str]
+    source_text: str
+    document_completeness: ProcessingCompleteness | None = None
+    incomplete_visuals_override: bool = False
+    visual_page_statuses: list[dict[str, Any]] = Field(default_factory=list)
+    workflow_instructions: str = ""
+    workflow_prompt: str = ""
+    candidate_terms: list[str] = Field(default_factory=list)
+
+
 @dataclass(frozen=True)
 class ContextDiagnostics:
     instruction_chars: int
@@ -63,6 +75,28 @@ PATH_INSTRUCTION = (
     "useful evidence, UPDATE when it does, or REVIEW_REQUIRED when boundaries remain unclear. Return complete "
     "Markdown content for CREATE/UPDATE."
 )
+
+
+def build_discovery_request(workflow: str, source: Path, prepared: dict[str, Any]
+                            ) -> tuple[AgentADiscoveryRequest, ContextDiagnostics]:
+    request = AgentADiscoveryRequest(
+        workflow=workflow,
+        source_metadata={"filename": source.name, "path": str(source), "extractor": str(prepared.get("pdf_extractor", ""))},
+        source_text=prepared["source_text"],
+        document_completeness=prepared.get("document_completeness"),
+        incomplete_visuals_override=bool(prepared.get("incomplete_visuals_override", False)),
+        visual_page_statuses=prepared.get("visual_page_statuses", []),
+        workflow_instructions=prepared.get("workflow_instructions", prepared.get("instructions", "")),
+        workflow_prompt=prepared.get("workflow_prompt", ""),
+        candidate_terms=prepared.get("candidate_terms", []),
+    )
+    serialized = json.dumps(request.model_dump(mode="json"), ensure_ascii=False)
+    return request, ContextDiagnostics(
+        instruction_chars=len(request.workflow_instructions) + len(request.workflow_prompt),
+        template_chars=0, source_chars=len(request.source_text), existing_note_chars=0,
+        candidate_metadata_chars=0, total_request_chars=len(serialized), estimated_tokens=(len(serialized)+3)//4,
+        candidate_notes_considered=0, candidate_notes_selected=0, full_note_bodies_loaded=0,
+        full_note_bodies_skipped=[], selected=[], excluded=[])
 
 
 def build_agent_a_request(workflow: str, source: Path, prepared: dict[str, Any],

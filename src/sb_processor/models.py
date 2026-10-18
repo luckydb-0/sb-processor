@@ -52,6 +52,42 @@ class Action(str, Enum):
     REVIEW_REQUIRED = "REVIEW_REQUIRED"
 
 
+class CandidateConcept(StrictModel):
+    proposed_name: str
+    aliases_or_terms_seen: list[str] = Field(default_factory=list)
+    source_pages: list[int] = Field(default_factory=list)
+    reason: str
+
+
+class CandidateMap(StrictModel):
+    proposed_name: str
+    source_pages: list[int] = Field(default_factory=list)
+    reason: str
+
+
+class SourceAnalysis(StrictModel):
+    source_identity: str
+    candidate_concepts: list[CandidateConcept]
+    candidate_maps: list[CandidateMap]
+    source_level_observations: list[str]
+
+
+class ConceptRelation(str, Enum):
+    NEW_CONCEPT = "NEW_CONCEPT"
+    EQUIVALENT_EXISTING = "EQUIVALENT_EXISTING"
+    BROADER_THAN_EXISTING = "BROADER_THAN_EXISTING"
+    NARROWER_THAN_EXISTING = "NARROWER_THAN_EXISTING"
+    RELATED_BUT_DISTINCT = "RELATED_BUT_DISTINCT"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
+class ConceptResolution(StrictModel):
+    candidate_name: str
+    relation: ConceptRelation
+    existing_path: str | None = None
+    reason: str
+
+
 class DraftChange(StrictModel):
     action: Action
     note_type: str
@@ -66,6 +102,7 @@ class LLMProposal(StrictModel):
     source_summary: str
     note_changes: list[DraftChange]
     review_required: list[str]
+    concept_resolutions: list[ConceptResolution] = Field(default_factory=list)
 
 
 class NoteChange(DraftChange):
