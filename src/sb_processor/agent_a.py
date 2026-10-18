@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,8 +11,9 @@ from typing import Any
 from pydantic import Field
 
 from .extraction import ProcessingCompleteness
-from .models import CandidateMatch, StrictModel
-from .retrieval import ExcludedNote, RetrievalResult
+from .models import CandidateConcept, CandidateImportance, CandidateMatch, SourceAnalysis, StrictModel
+from .retrieval import CandidateRetrieval, ExcludedNote, RetrievalResult
+from .registry import normalize
 
 
 class ExistingNoteContext(StrictModel):
@@ -36,6 +38,23 @@ class AgentARequest(StrictModel):
     relevant_existing_notes: list[ExistingNoteContext] = Field(default_factory=list)
     retrieval_limitation: str
     path_instruction: str
+    source_analysis: SourceAnalysis | None = None
+    candidate_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    workflow_required_note_types: list[str] = Field(default_factory=list)
+
+
+class AgentADiscoveryRequest(StrictModel):
+    workflow: str
+    source_metadata: dict[str, str]
+    source_text: str
+    document_completeness: ProcessingCompleteness | None = None
+    incomplete_visuals_override: bool = False
+    visual_page_statuses: list[dict[str, Any]] = Field(default_factory=list)
+    workflow_instructions: str = ""
+    workflow_prompt: str = ""
+    candidate_terms: list[str] = Field(default_factory=list)
+    workflow_required_note_types: list[str] = Field(default_factory=list)
+    max_candidate_concepts: int = 20
 
 
 @dataclass(frozen=True)
@@ -65,6 +84,67 @@ PATH_INSTRUCTION = (
 )
 
 
+def build_discovery_request(workflow: str, source: Path, prepared: dict[str, Any], *, max_candidate_concepts: int = 20
+                            ) -> tuple[AgentADiscoveryRequest, ContextDiagnostics]:
+    request = AgentADiscoveryRequest(
+        workflow=workflow,
+        source_metadata={"filename": source.name, "path": str(source), "extractor": str(prepared.get("pdf_extractor", ""))},
+        source_text=prepared["source_text"],
+        document_completeness=prepared.get("document_completeness"),
+        incomplete_visuals_override=bool(prepared.get("incomplete_visuals_override", False)),
+        visual_page_statuses=prepared.get("visual_page_statuses", []),
+        workflow_instructions=prepared.get("workflow_instructions", prepared.get("instructions", "")),
+        workflow_prompt=prepared.get("workflow_prompt", ""),
+        candidate_terms=prepared.get("candidate_terms", []),
+        workflow_required_note_types=prepared.get("required_note_types", []),
+        max_candidate_concepts=max_candidate_concepts,
+    )
+    serialized = json.dumps(request.model_dump(mode="json"), ensure_ascii=False)
+    return request, ContextDiagnostics(
+        instruction_chars=len(request.workflow_instructions) + len(request.workflow_prompt),
+        template_chars=0, source_chars=len(request.source_text), existing_note_chars=0,
+        candidate_metadata_chars=0, total_request_chars=len(serialized), estimated_tokens=(len(serialized)+3)//4,
+        candidate_notes_considered=0, candidate_notes_selected=0, full_note_bodies_loaded=0,
+        full_note_bodies_skipped=[], selected=[], excluded=[])
+
+
+def select_analysis_candidates(analysis: SourceAnalysis, *, max_concepts: int
+                               ) -> tuple[SourceAnalysis, list[CandidateConcept]]:
+    """Bound Pass 2 explicitly; prioritize the model's reusable-concept importance labels."""
+    if max_concepts < 1:
+        raise ValueError("max_concepts must be positive")
+    candidates = analysis.candidate_concepts
+    priority = {CandidateImportance.HIGH: 0, CandidateImportance.MEDIUM: 1, CandidateImportance.LOW: 2}
+    chosen_indices = set(sorted(range(len(candidates)), key=lambda i: (priority[candidates[i].importance], i))[:max_concepts])
+    selected = [candidate for i, candidate in enumerate(candidates) if i in chosen_indices]
+    omitted = [candidate for i, candidate in enumerate(candidates) if i not in chosen_indices]
+    return analysis.model_copy(update={"candidate_concepts": selected}), omitted
+
+
+def enrich_definition_candidates(analysis: SourceAnalysis, source_text: str) -> SourceAnalysis:
+    """Preserve short explicit 'What is a/an X?' definition headings the LLM may omit."""
+    concepts = list(analysis.candidate_concepts)
+    known = {normalize(c.proposed_name).replace(" ", "") for c in concepts}
+    page = None
+    for line in source_text.splitlines():
+        marker = re.fullmatch(r"\[Page (\d+)\]", line.strip())
+        if marker:
+            page = int(marker.group(1))
+            continue
+        heading = re.fullmatch(r"(?i)What is (?:an? )(.{3,45}?)\?", line.strip())
+        if heading is None:
+            continue
+        term = heading.group(1).strip()
+        key = normalize(term).replace(" ", "")
+        if key in known:
+            continue
+        known.add(key)
+        concepts.append(CandidateConcept(proposed_name=term.title(), source_pages=[page] if page else [],
+                                         reason="Explicit definition heading in processed source",
+                                         importance=CandidateImportance.HIGH))
+    return analysis.model_copy(update={"candidate_concepts": concepts})
+
+
 def build_agent_a_request(workflow: str, source: Path, prepared: dict[str, Any],
                           retrieval: RetrievalResult) -> tuple[AgentARequest, ContextDiagnostics]:
     candidates = retrieval.candidates
@@ -85,6 +165,7 @@ def build_agent_a_request(workflow: str, source: Path, prepared: dict[str, Any],
                                  for c in candidates if c.path in retrieval.loaded_bodies],
         retrieval_limitation=retrieval.limitation,
         path_instruction=PATH_INSTRUCTION,
+        workflow_required_note_types=prepared.get("required_note_types", []),
     )
     payload = request.model_dump(mode="json")
     candidate_json = json.dumps(payload["candidate_existing_notes"], ensure_ascii=False)
@@ -103,4 +184,40 @@ def build_agent_a_request(workflow: str, source: Path, prepared: dict[str, Any],
                   for c in candidates],
         excluded=retrieval.excluded,
     )
+    return request, diagnostics
+
+
+def build_resolution_request(workflow: str, source: Path, prepared: dict[str, Any],
+                             analysis: SourceAnalysis, retrievals: list[CandidateRetrieval]
+                             ) -> tuple[AgentARequest, ContextDiagnostics]:
+    """Assemble one pass-2 request from independent bounded candidate searches."""
+    unique = {}
+    bodies = {}
+    excluded = {}
+    skipped = []
+    for result in retrievals:
+        for candidate in result.candidates:
+            old = unique.get(candidate.path)
+            if old is None or candidate.score > old.score:
+                unique[candidate.path] = candidate
+        bodies.update(result.loaded_bodies)
+        for item in result.excluded:
+            excluded[item.path] = item
+        skipped.extend(result.skipped_bodies)
+    aggregate = RetrievalResult(candidates=list(unique.values()), loaded_bodies=bodies,
+                                excluded=list(excluded.values()), considered=sum(r.considered for r in retrievals),
+                                skipped_bodies=list(dict.fromkeys(skipped)))
+    request, diagnostics = build_agent_a_request(workflow, source, prepared, aggregate)
+    request.candidate_existing_notes = []  # Per-candidate evidence below is the sole metadata channel.
+    request.source_analysis = analysis
+    request.candidate_evidence = [
+        {"candidate_name": result.candidate_name,
+         "retrieved": [item.model_dump(mode="json") for item in result.candidates],
+         "loaded_body_paths": list(result.loaded_bodies), "skipped_body_paths": result.skipped_bodies}
+        for result in retrievals]
+    payload = request.model_dump(mode="json")
+    serialized = json.dumps(payload, ensure_ascii=False)
+    diagnostics = ContextDiagnostics(**{**vars(diagnostics),
+        "candidate_metadata_chars": len(json.dumps(payload["candidate_evidence"], ensure_ascii=False)),
+        "total_request_chars": len(serialized), "estimated_tokens": (len(serialized)+3)//4})
     return request, diagnostics
