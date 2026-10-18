@@ -10,8 +10,8 @@ from typing import Any
 from pydantic import Field
 
 from .extraction import ProcessingCompleteness
-from .models import CandidateMatch, StrictModel
-from .retrieval import ExcludedNote, RetrievalResult
+from .models import CandidateMatch, SourceAnalysis, StrictModel
+from .retrieval import CandidateRetrieval, ExcludedNote, RetrievalResult
 
 
 class ExistingNoteContext(StrictModel):
@@ -36,6 +36,8 @@ class AgentARequest(StrictModel):
     relevant_existing_notes: list[ExistingNoteContext] = Field(default_factory=list)
     retrieval_limitation: str
     path_instruction: str
+    source_analysis: SourceAnalysis | None = None
+    candidate_evidence: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AgentADiscoveryRequest(StrictModel):
@@ -137,4 +139,38 @@ def build_agent_a_request(workflow: str, source: Path, prepared: dict[str, Any],
                   for c in candidates],
         excluded=retrieval.excluded,
     )
+    return request, diagnostics
+
+
+def build_resolution_request(workflow: str, source: Path, prepared: dict[str, Any],
+                             analysis: SourceAnalysis, retrievals: list[CandidateRetrieval]
+                             ) -> tuple[AgentARequest, ContextDiagnostics]:
+    """Assemble one pass-2 request from independent bounded candidate searches."""
+    unique = {}
+    bodies = {}
+    excluded = {}
+    skipped = []
+    for result in retrievals:
+        for candidate in result.candidates:
+            unique.setdefault(candidate.path, candidate)
+        bodies.update(result.loaded_bodies)
+        for item in result.excluded:
+            excluded[item.path] = item
+        skipped.extend(result.skipped_bodies)
+    aggregate = RetrievalResult(candidates=list(unique.values()), loaded_bodies=bodies,
+                                excluded=list(excluded.values()), considered=sum(r.considered for r in retrievals),
+                                skipped_bodies=list(dict.fromkeys(skipped)))
+    request, diagnostics = build_agent_a_request(workflow, source, prepared, aggregate)
+    request.source_analysis = analysis
+    request.candidate_evidence = [
+        {"candidate_name": result.candidate_name,
+         "retrieved": [item.model_dump(mode="json") for item in result.candidates],
+         "semantic_observations": [vars(item) for item in result.semantic_observations],
+         "loaded_body_paths": list(result.loaded_bodies), "skipped_body_paths": result.skipped_bodies}
+        for result in retrievals]
+    payload = request.model_dump(mode="json")
+    serialized = json.dumps(payload, ensure_ascii=False)
+    diagnostics = ContextDiagnostics(**{**vars(diagnostics),
+        "candidate_metadata_chars": len(json.dumps(payload["candidate_evidence"], ensure_ascii=False)),
+        "total_request_chars": len(serialized), "estimated_tokens": (len(serialized)+3)//4})
     return request, diagnostics

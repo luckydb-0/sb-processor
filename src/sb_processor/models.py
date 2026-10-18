@@ -122,6 +122,7 @@ class ProcessingProposal(StrictModel):
     note_changes: list[NoteChange]
     review_required: list[str]
     source_completeness: ProcessingCompleteness | None = None
+    concept_resolutions: list[ConceptResolution] = Field(default_factory=list)
 
 
 class ReviewStatus(str, Enum):

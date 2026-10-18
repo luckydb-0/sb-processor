@@ -1,7 +1,7 @@
 import json
 import pytest
 
-from sb_processor.models import Action, DraftChange, LLMProposal
+from sb_processor.models import Action, CandidateConcept, CandidateMap, DraftChange, LLMProposal, SourceAnalysis
 from sb_processor.pipeline import IncompleteDocumentError, process_source
 from sb_processor.registry import Registry
 from sb_processor.vault import scan_vault
@@ -15,6 +15,13 @@ class FakeWorkflow:
 
 
 class FakeLLM:
+    def analyze_source(self, *, context):
+        text = context["source_text"]
+        concepts = [name for name in ("PCA", "Machine Learning", "Supervised Learning") if name in text]
+        return SourceAnalysis(source_identity="fixture source", candidate_concepts=[
+            CandidateConcept(proposed_name=name, reason="Observed in source") for name in concepts],
+            candidate_maps=[], source_level_observations=[])
+
     def generate_processing_proposal(self, *, context):
         return LLMProposal(
             source_summary="A short source",
@@ -69,7 +76,7 @@ def test_pipeline_rejects_staging_inside_vault(tmp_path):
         raise AssertionError("Expected path safety error")
 
 
-class UnsafeLLM:
+class UnsafeLLM(FakeLLM):
     def generate_processing_proposal(self, *, context):
         return LLMProposal(source_summary="unsafe", review_required=[], note_changes=[
             DraftChange(action=Action.CREATE, note_type="concept", title="Escape", target_path="../escape.md", reason="test", content="# Escape", sources=[]),
@@ -88,7 +95,7 @@ def test_pipeline_rejects_model_path_traversal_without_writing(tmp_path):
     assert list((run / "notes").rglob("*.md")) == []
 
 
-class BlindUpdateLLM:
+class BlindUpdateLLM(FakeLLM):
     def generate_processing_proposal(self, *, context):
         return LLMProposal(source_summary="update", review_required=[], note_changes=[
             DraftChange(action=Action.UPDATE, note_type="concept", title="Unrelated", target_path="Dots/Existing.md", reason="test", content="# Replacement", sources=[]),
@@ -127,6 +134,10 @@ class TrackingLLM(FakeLLM):
         self.calls.append(context)
         return super().generate_processing_proposal(context=context)
 
+    def analyze_source(self, *, context):
+        self.calls.append(context)
+        return super().analyze_source(context=context)
+
 
 def test_partial_source_blocks_llm_without_override(tmp_path):
     vault = tmp_path / "vault"
@@ -150,7 +161,8 @@ def test_explicit_override_preserves_partial_status_in_staging(tmp_path):
     run = process_source(vault_path=vault, source_path=source, staging_path=tmp_path / "stage",
                          database_path=tmp_path / "db.sqlite", workflow=PartialWorkflow(), llm=llm,
                          allow_incomplete_visuals=True)
-    assert len(llm.calls) == 1
+    assert len(llm.calls) == 2
+    assert llm.calls[0]["document_completeness"]["status"] == "PARTIAL"
     context = json.loads((run / "request_context.json").read_text())
     proposal = json.loads((run / "proposal.json").read_text())
     assert context["incomplete_visuals_override"] is True
@@ -216,7 +228,7 @@ def test_invalid_structured_response_does_not_stage(tmp_path):
     source = tmp_path / "source.pdf"
     source.write_bytes(b"fixture")
 
-    class InvalidLLM:
+    class InvalidLLM(FakeLLM):
         def generate_processing_proposal(self, *, context):
             return {"source_summary": "incomplete", "note_changes": [{"action": "DELETE"}], "review_required": []}
 
@@ -239,7 +251,7 @@ def test_loose_lexical_candidate_does_not_force_create_review(tmp_path):
         def prepare(self, source, vault):
             return {"source_text": "[Page 1]\nTEXT:\nSupervised Learning", "candidate_terms": ["Supervised Learning"]}
 
-    class LLM:
+    class LLM(FakeLLM):
         def generate_processing_proposal(self, *, context):
             return LLMProposal(source_summary="Supervised", review_required=[], note_changes=[
                 DraftChange(action=Action.CREATE, note_type="concept", title="Supervised Learning",
@@ -267,7 +279,11 @@ def test_map_canonical_name_collision_requires_review(tmp_path):
         def prepare(self, source, vault):
             return {"source_text": "Machine Learning", "suggested_note_roots": {"map": "Maps"}}
 
-    class LLM:
+    class LLM(FakeLLM):
+        def analyze_source(self, *, context):
+            return SourceAnalysis(source_identity="fixture source", candidate_concepts=[], candidate_maps=[
+                CandidateMap(proposed_name="Machine Learning - Map", reason="Map")], source_level_observations=[])
+
         def generate_processing_proposal(self, *, context):
             return LLMProposal(source_summary="Map", review_required=[], note_changes=[
                 DraftChange(action=Action.CREATE, note_type="map", title="Machine Learning - Map",

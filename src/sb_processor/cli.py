@@ -13,6 +13,7 @@ from .registry import Registry
 from .vault import scan_vault
 from .workflows.university import UniversityWorkflow
 from .visual import OpenAIVisualPageExtractor
+from .semantic import DEFAULT_EMBEDDING_MODEL
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,6 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--vault", type=Path, required=True)
     process.add_argument("--staging", type=Path, default=Path("staging"))
     process.add_argument("--database", type=Path, default=Path(".data/registry.sqlite"))
+    process.add_argument("--semantic-index", type=Path, default=Path(".data/semantic_qdrant"))
+    process.add_argument("--embedding-cache", type=Path, default=Path(".data/models"))
+    process.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
+    process.add_argument("--semantic-threshold", type=float, default=0.55)
+    process.add_argument("--candidate-top-k", type=int, default=4)
     process.add_argument("--model", default="gpt-4o-mini")
     process.add_argument("--pdf-extractor", choices=["pymupdf", "anydoc", "pymupdf4llm"], default="pymupdf")
     process.add_argument("--visual-model", default="gpt-5.4")
@@ -82,13 +88,17 @@ def main(argv: list[str] | None = None) -> int:
         for match in Registry(args.database).lookup(args.query):
             print(f"{match.match_kind:14} {match.score:.2f} {match.path}")
     elif args.command == "process":
-        _reject_inside_vault(parser, args.vault, args.staging, args.database, args.visual_cache)
+        _reject_inside_vault(parser, args.vault, args.staging, args.database, args.visual_cache,
+                             args.semantic_index, args.embedding_cache)
         workflow = UniversityWorkflow(rules_path=args.rules, templates_path=args.templates, instructions_path=args.instructions,
                                       pdf_extractor=args.pdf_extractor, visual_extractor=_visual_extractor(args.skip_visual, args.visual_model),
                                       visual_cache=args.visual_cache)
         run = process_source(vault_path=args.vault, source_path=args.source, staging_path=args.staging, database_path=args.database,
                              workflow=workflow, llm=OpenAILLMClient(args.model),
-                             allow_incomplete_visuals=args.allow_incomplete_visuals)
+                             allow_incomplete_visuals=args.allow_incomplete_visuals,
+                             semantic_index_path=args.semantic_index, embedding_cache=args.embedding_cache,
+                             embedding_model=args.embedding_model,
+                             semantic_threshold=args.semantic_threshold, candidate_top_k=args.candidate_top_k)
         print(f"Staged proposal: {run}")
     elif args.command == "compare-pdf":
         if args.output_dir.resolve().is_relative_to(args.vault.resolve(strict=True)):
