@@ -1,6 +1,6 @@
 # Second Brain processor PoC
 
-A command-line proof of concept for processing sources against an Obsidian vault. It indexes Markdown notes in a disposable SQLite database, extracts and cleans a source PDF, asks an OpenAI model for a Pydantic-validated note proposal, checks target paths and possible matches, and saves drafts for review. It **never writes to the vault**.
+A command-line proof of concept for processing sources against an Obsidian vault. It indexes Markdown notes in disposable SQLite and local Qdrant indexes, extracts and cleans a source PDF, runs two structured Agent A passes, checks target paths and possible matches, and saves drafts for review. It **never writes to the vault**.
 
 The only processing workflow currently implemented is `university`, for one lecture PDF at a time. Normal runs use the compact University Processing Instructions and templates from the vault. The long University Material Processing Rules remain reference material and enter a request only when explicitly selected with `--rules`.
 
@@ -11,7 +11,7 @@ From `sb-processor/`, with Python 3.11 or newer:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[test]'
+python -m pip install -e '.[test,semantic]'
 ```
 
 The default PDF extractor is PyMuPDF. To select the optional extractors, install their extras:
@@ -39,7 +39,7 @@ python -m sb_processor ingest-pdf --source /path/to/lecture.pdf --vault ../gd-gd
 python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb
 ```
 
-`scan` builds `.data/registry.sqlite`; `lookup` searches that database. `process` rebuilds it automatically, so a separate scan is optional before processing. It writes a proposal to `staging/run_<UTC timestamp>_<id>/`, never to the vault. Use `--database` and `--staging` to change those paths, keeping both outside the vault. Review `review.md`, `proposal.json`, and the Markdown under `notes/` before manually using any draft.
+`scan` builds `.data/registry.sqlite`; `lookup` searches that database. `process` rebuilds SQLite, incrementally syncs the local vector index, and writes a proposal to `staging/run_<UTC timestamp>_<id>/`, never to the vault. Keep `--database`, `--semantic-index`, `--embedding-cache`, and `--staging` outside the vault. Review `review.md`, `proposal.json`, and the Markdown under `notes/` before manually using any draft.
 
 The university workflow expects `University Templates.md` and `Agent A - University Compact Processing Instructions.md` under the vault's `+ Inbox` folder. Use `--templates` and `--instructions` if they live elsewhere. `--rules` explicitly replaces the compact instructions with a long rules file; it cannot be combined with `--instructions`. `--model` selects a Structured Outputs capable OpenAI model (default `gpt-4o-mini`).
 
@@ -64,26 +64,37 @@ The document's `completeness` object reports `COMPLETE` or `PARTIAL`, flagged pa
 
 The university adapter reports vault-relative note roots to the model. In this vault, the suggested roots are `Atlas/Dots`, `Atlas/Maps`, and `Atlas/Sources/University`; in a vault without an `Atlas/Dots` folder they are `Dots`, `Maps`, and `Sources/University`.
 
-Agent A retrieval first queries SQLite for path, title, filename, type, aliases, and maps without reading note bodies. A workflow policy admits relevant Dots, Maps, and university source notes, then ranks exact, filename, alias, canonical Map-name, and lexical matches. README, prompts, configuration, staging, and instruction files are excluded as knowledge candidates. Only a capped set of ranked full bodies enters the typed Agent A request. If a body exceeds the size budget, it remains metadata-only and any attempted UPDATE requires review. Retrieval is deterministic: no match does not establish that a concept is new.
+Agent A Pass 1 receives page-aware source evidence, completeness, compact workflow instructions, and no existing Concept Note bodies. Its Pydantic `SourceAnalysis` names candidate concepts, maps, and source-level notes without deciding vault actions. A small deterministic supplement preserves explicit “What is X?” definition headings that a broad lecture analysis may omit; the added names are audited. Discovery is capped at 20 important concepts by default (`--max-discovered-concepts`); any omitted candidates are recorded for review. Pass 2 retrieves evidence independently for each selected concept: exact title, filename, alias, spacing/hyphenation variant, lexical, and local semantic similarity. Exact and alias candidates outrank semantic hits; semantic scores never trigger a merge. A workflow policy limits concept equivalence searches and semantic indexing to `Dots/` regardless of source origin. README, prompts, configuration, staging, and instruction files are excluded. Full bodies are loaded only for the bounded selected candidates and source/map context. Missing candidates do not prove novelty.
+
+The default local embedding model is [`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2), run through FastEmbed ONNX on the local machine. [FastEmbed lists it](https://qdrant.github.io/fastembed/examples/Supported_Models/) as a 384-dimensional multilingual model of about 220 MB. It was selected for English, Italian, and Spanish similarity with a modest PoC footprint. The model is downloaded to `.data/models` on first use; embeddings are never sent to an external API. `--embedding-model`, `--embedding-cache`, and `--semantic-index` are configurable. The representation is deterministic: title, aliases, then the first 1,800 body characters. A model or representation-version change creates a separate Qdrant collection. Sync compares vault content hashes, reuses unchanged vectors, updates changed notes, and deletes removed notes; deleting the disposable index allows a full rebuild from the vault.
+
+The initial semantic cutoff is `0.50` (`--semantic-threshold`), with at most four candidates per concept (`--candidate-top-k`). This cutoff was checked against the small Machine Learning fixture: exact topic queries scored roughly 0.66–0.78, unrelated notes mostly below 0.48, and an Italian Dataset paraphrase about 0.54. It is a conservative candidate-generation setting from a small sample, not an equivalence probability. Raw scores above and below the cutoff are saved in the retrieval audit but omitted from Pass 2 to keep its context smaller.
 
 Each run contains:
 
 ```text
-proposal.json         validated proposal with actions, matches, and source hashes
-request_context.json  exact non-secret context sent to the model
-context_diagnostics.json  character/token estimates, selected notes, and exclusions
-review.md             readable actions, reasons, candidate matches, staged paths
-notes/                proposed complete Markdown files at their target paths
-conflicts/            duplicate-target drafts when present
+source_analysis.json       full Pass 1 structured discovery
+discovery_selection.json  selected and omitted concept candidates
+pass1_request.json         exact Pass 1 context
+pass1_diagnostics.json     Pass 1 size breakdown
+request_context.json       exact Pass 2 context
+context_diagnostics.json   Pass 2 size breakdown and exclusions
+retrieval_evidence.json    candidate-by-candidate methods and all semantic scores
+semantic_diagnostics.json  model, index sync, and query counts
+proposal.json             validated proposal and concept resolutions
+wikilinks.json            existing, same-proposal, and unresolved links
+review.md                 readable decisions and audit
+notes/                    proposed complete Markdown files
+conflicts/                duplicate-target drafts when present
 ```
 
-`request_context.json` contains page-aware extracted source text and selected vault note content. `context_diagnostics.json` records instruction, template, source, existing-body, candidate-metadata, and total request sizes; which candidate bodies were loaded; and excluded paths. Token count is a characters/4 estimate. Keep staging local and private. Review all proposed Markdown and the original note hashes before any later manual copy or future approval workflow.
+`request_context.json` contains page-aware extracted source text, selected candidate evidence, and selected vault note content. The diagnostics record instruction, template, source, existing-body, candidate-metadata, and total request sizes; selected bodies; and excluded paths. Token count is a characters/4 estimate. Keep staging local and private. Review all proposed Markdown and original note hashes before any later manual copy or future approval workflow.
 
 ## What the code checks
 
-The registry supports normalized exact title, filename, alias, path, and note-type queries, plus a simple lexical candidate search. Lookup returns possible notes, never a semantic-equivalence decision. A `CREATE` with an exact title, filename, alias, or canonical Map-name collision or an existing target becomes `REVIEW_REQUIRED`; loose lexical overlap stays visible without automatically blocking creation. An `UPDATE` becomes `REVIEW_REQUIRED` if its target does not exist or its full current body was not sent to the model. Unsafe paths, paths outside workflow roots, duplicate targets, and missing Markdown content also require review. With an explicit incomplete-visual override, proposed writes become `REVIEW_REQUIRED`. The model is asked to make explicit `NO_CHANGE` decisions for supplied existing bodies; omissions become review items. All proposals remain staged only.
+The registry supports normalized exact title, filename, alias, path, and note-type queries, plus lexical candidate search. Retrieval returns possible notes, never a semantic-equivalence decision. A `CREATE` with an exact/alias/normalized-variant collision or an existing target becomes `REVIEW_REQUIRED`; loose lexical and semantic overlap stays visible without automatically blocking creation. An `UPDATE` becomes `REVIEW_REQUIRED` if its target does not exist or its full current body was not sent to the model. An ambiguous concept resolution, conflicting existing path, or broad alias pointing to a narrower existing title also requires review. Unsafe paths, paths outside workflow roots, duplicate targets, and missing Markdown content require review. With an explicit incomplete-visual override, proposed writes become `REVIEW_REQUIRED`. Unresolved wikilinks are reported, not blocked. All proposals remain staged only.
 
-All three text extractors run locally and accept text-based PDFs. The `anydoc` path explicitly uses `ocr="reject"`; it never invokes anydoc's hosted OCR, which would send a PDF to Firecrawl. Image-only PDFs need OCR before this PoC can process them. Visual enrichment sends only detector-flagged page images to the configured OpenAI API. Sources over 120,000 Agent A context characters are rejected instead of silently truncated. No embeddings, vector database, web app, Agent B execution, or vault write operation is included.
+All three text extractors run locally and accept text-based PDFs. The `anydoc` path explicitly uses `ocr="reject"`; it never invokes anydoc's hosted OCR, which would send a PDF to Firecrawl. Image-only PDFs need OCR before this PoC can process them. Visual enrichment sends only detector-flagged page images to the configured OpenAI API. Sources over 120,000 cleaned source characters are rejected instead of silently truncated. There is no web app, Agent B execution, or vault write operation.
 
 ## Tests
 
@@ -92,5 +103,7 @@ python -m pytest -q
 ```
 
 Tests cover scanning/frontmatter, policy-aware metadata retrieval, alias and filename ranking, context size bounds, safe staging, update checks, PDF extractors, comparison output, completeness gating, selective rendering, caching, failures, and both OpenAI request shapes. They use fake clients for deterministic integration; a live Agent A run requires a PDF and `OPENAI_API_KEY`.
+
+After the local model has been cached, run the actual multilingual retrieval test without cloud access with `SB_RUN_LOCAL_MODEL_TEST=1 python -m pytest -q`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the file map, schemas, SQLite tables, and design choices. The [ingestion v1 technical debt list](docs/technical-debt/ingestion-v1.md) records known follow-up work for Agent A and PDF ingestion.

@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sb_processor.agent_a import build_discovery_request, select_analysis_candidates
+from sb_processor.agent_a import build_discovery_request, enrich_definition_candidates, select_analysis_candidates
 from sb_processor.llm import OpenAILLMClient
 from sb_processor.models import SourceAnalysis
 
@@ -68,3 +68,14 @@ def test_discovery_cap_keeps_high_importance_and_reports_omissions():
     selected, omitted = select_analysis_candidates(analysis, max_concepts=2)
     assert [c.proposed_name for c in selected.candidate_concepts] == ["Data Mining", "Classification"]
     assert [c.proposed_name for c in omitted] == ["Small example", "Minor detail"]
+
+
+def test_explicit_definition_heading_survives_discovery_cap():
+    analysis = SourceAnalysis(source_identity="fixture", candidate_concepts=[
+        {"proposed_name": "Other Topic", "reason": "Mentioned", "importance": "MEDIUM"}],
+        candidate_maps=[], source_level_observations=[])
+    enriched = enrich_definition_candidates(analysis, "[Page 50]\nTEXT:\nWhat is a data set?\nA set of examples")
+    selected, omitted = select_analysis_candidates(enriched, max_concepts=1)
+    assert selected.candidate_concepts[0].proposed_name == "Data Set"
+    assert selected.candidate_concepts[0].source_pages == [50]
+    assert [c.proposed_name for c in omitted] == ["Other Topic"]

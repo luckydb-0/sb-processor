@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from pydantic import Field
 from .extraction import ProcessingCompleteness
 from .models import CandidateConcept, CandidateImportance, CandidateMatch, SourceAnalysis, StrictModel
 from .retrieval import CandidateRetrieval, ExcludedNote, RetrievalResult
+from .registry import normalize
 
 
 class ExistingNoteContext(StrictModel):
@@ -117,6 +119,30 @@ def select_analysis_candidates(analysis: SourceAnalysis, *, max_concepts: int
     selected = [candidate for i, candidate in enumerate(candidates) if i in chosen_indices]
     omitted = [candidate for i, candidate in enumerate(candidates) if i not in chosen_indices]
     return analysis.model_copy(update={"candidate_concepts": selected}), omitted
+
+
+def enrich_definition_candidates(analysis: SourceAnalysis, source_text: str) -> SourceAnalysis:
+    """Preserve explicit 'What is X?' definition headings the LLM may omit in a broad source."""
+    concepts = list(analysis.candidate_concepts)
+    known = {normalize(c.proposed_name).replace(" ", "") for c in concepts}
+    page = None
+    for line in source_text.splitlines():
+        marker = re.fullmatch(r"\[Page (\d+)\]", line.strip())
+        if marker:
+            page = int(marker.group(1))
+            continue
+        heading = re.fullmatch(r"(?i)What is (?:an? |the )?(.{3,70}?)\?", line.strip())
+        if heading is None:
+            continue
+        term = heading.group(1).strip()
+        key = normalize(term).replace(" ", "")
+        if key in known:
+            continue
+        known.add(key)
+        concepts.append(CandidateConcept(proposed_name=term.title(), source_pages=[page] if page else [],
+                                         reason="Explicit definition heading in processed source",
+                                         importance=CandidateImportance.HIGH))
+    return analysis.model_copy(update={"candidate_concepts": concepts})
 
 
 def build_agent_a_request(workflow: str, source: Path, prepared: dict[str, Any],

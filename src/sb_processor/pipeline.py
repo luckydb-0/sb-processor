@@ -6,7 +6,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from .llm import LLMClient
-from .agent_a import build_discovery_request, build_resolution_request, select_analysis_candidates
+from .agent_a import build_discovery_request, build_resolution_request, enrich_definition_candidates, select_analysis_candidates
 from .extraction import ProcessingCompleteness, CompletenessStatus
 from .models import Action, ConceptRelation, LLMProposal, NoteChange, NoteMetadata, ProcessingProposal, SourceAnalysis
 from .registry import Registry, lexical_tokens
@@ -90,6 +90,10 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
     except Exception:
         log.exception("Structured source discovery or validation failed")
         raise
+    model_candidate_names = {candidate.proposed_name for candidate in analysis.candidate_concepts}
+    analysis = enrich_definition_candidates(analysis, workflow_context["source_text"])
+    deterministic_added = [candidate.proposed_name for candidate in analysis.candidate_concepts
+                           if candidate.proposed_name not in model_candidate_names]
     selected_analysis, omitted_concepts = select_analysis_candidates(
         analysis, max_concepts=max_discovered_concepts)
     owned_index = None
@@ -220,6 +224,7 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
                           source_analysis=analysis.model_dump(mode="json"),
                           discovery_selection={"max_candidate_concepts": max_discovered_concepts,
                                                "selected": [c.proposed_name for c in selected_analysis.candidate_concepts],
-                                               "omitted": [c.proposed_name for c in omitted_concepts]},
+                                               "omitted": [c.proposed_name for c in omitted_concepts],
+                                               "deterministic_added": deterministic_added},
                           retrieval_evidence=retrieval_audit, semantic_stats=semantic_stats,
                           wikilink_audit=wikilinks)

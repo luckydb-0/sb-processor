@@ -98,6 +98,8 @@ def stage_proposal(staging_path: Path, proposal: ProcessingProposal, context: di
         lines.append("")
     if discovery_selection is not None:
         lines += ["## Discovery selection", "", f"Selected {len(discovery_selection['selected'])} of {len(discovery_selection['selected']) + len(discovery_selection['omitted'])} candidate concepts (cap {discovery_selection['max_candidate_concepts']}).", ""]
+        if discovery_selection.get("deterministic_added"):
+            lines += ["Explicit definition headings added deterministically: " + ", ".join(discovery_selection["deterministic_added"]), ""]
         if discovery_selection["omitted"]:
             lines += ["Omitted for review: " + ", ".join(discovery_selection["omitted"]), ""]
     lines += ["## Context diagnostics", "",
