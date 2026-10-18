@@ -9,6 +9,7 @@ import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 
 from .cleaning import DocumentCleaner
 from .extraction import ExtractedDocument, extract_document
@@ -47,6 +48,9 @@ def _metrics(document: ExtractedDocument) -> dict:
     visual_pages = [{"page_number": page.page_number, "flags": page.visual_flags,
                      "features": page.metadata.get("visual_features", {})}
                     for page in document.pages if page.requires_visual_processing]
+    native_items = Counter(label for page in document.pages
+                           for label, count in page.metadata.get("docling_item_counts", {}).items()
+                           for _ in range(count))
     return {
         "raw_characters": len(raw), "raw_words": len(raw.split()),
         "clean_characters": len(cleaned), "clean_words": len(cleaned.split()),
@@ -68,11 +72,12 @@ def _metrics(document: ExtractedDocument) -> dict:
         "unicode_normalizations": actions["unicode_normalized"],
         "paragraph_reflows": actions["paragraph_reflow"],
         "sections": sections, "visual_pages": visual_pages,
+        "native_item_counts": dict(native_items),
         "reduction_characters_by_stage": stage_reductions,
     }
 
 
-def compare_pdf_extractors(source: Path, output_root: Path) -> Path:
+def compare_pdf_extractors(source: Path, output_root: Path, *, include_docling: bool = False) -> Path:
     source = Path(source).resolve(strict=True)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
     run = Path(output_root) / f"compare_{run_id}"
@@ -80,8 +85,11 @@ def compare_pdf_extractors(source: Path, output_root: Path) -> Path:
     results = {}
     report = ["# Cleaning report", "", f"Source: `{source}`", ""]
     cleaner = DocumentCleaner()
-    for extractor in ("pymupdf", "anydoc", "pymupdf4llm"):
+    extractors = ("pymupdf", "anydoc", "pymupdf4llm") + (("docling",) if include_docling else ())
+    for extractor in extractors:
+        started = perf_counter()
         raw = extract_document(source, extractor)
+        extraction_seconds = round(perf_counter() - started, 2)
         clean = cleaner.clean(raw)
         (run / f"{extractor}_raw.md").write_text(raw.raw_markdown() + "\n", encoding="utf-8")
         (run / f"{extractor}_clean.md").write_text(clean.cleaned_markdown() + "\n", encoding="utf-8")
@@ -102,6 +110,8 @@ def compare_pdf_extractors(source: Path, output_root: Path) -> Path:
             results[extractor] = _metrics(clean)
         else:
             results[extractor] = _metrics(clean)
+        results[extractor]["extraction_seconds"] = extraction_seconds
+        results[extractor]["conversion_status"] = clean.metadata.get("docling_conversion_status")
         report += [f"## {extractor}", ""]
         for page in clean.pages:
             removed = [block for block in page.blocks if not block.keep]
@@ -121,13 +131,14 @@ def compare_pdf_extractors(source: Path, output_root: Path) -> Path:
                   "token_estimate_method": "characters / 4; approximate, not model tokenizer counts"}
     (run / "comparison.json").write_text(json.dumps(comparison, indent=2) + "\n", encoding="utf-8")
     lines = ["# PDF extraction comparison", "", f"Source: `{source}`", "",
-             "| Extractor | Raw words | Clean words | Reduction | Pages raw / clean | Explicit page markers | Markdown headings | Table lines | Sections | Unicode lines | Reflows | Visual pages | Removed blocks | Navigation pages |",
-             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+             "| Extractor | Seconds | Raw words | Clean words | Reduction | Pages raw / clean | Explicit page markers | Markdown headings | Table lines | Native tables / pictures | Sections | Unicode lines | Reflows | Visual pages | Removed blocks | Navigation pages |",
+             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for name, m in results.items():
         raw_file = f"{name}.md" if name in ("pymupdf", "anydoc") else f"{name}_raw.md"
-        lines.append(f"| [{name}]({raw_file}) | {m['raw_words']} | {m['clean_words']} | {m['character_reduction_percent']}% | "
+        items = m['native_item_counts']
+        lines.append(f"| [{name}]({raw_file}) | {m['extraction_seconds']:.2f} | {m['raw_words']} | {m['clean_words']} | {m['character_reduction_percent']}% | "
                      f"{m['pages_with_raw_content']} / {m['pages_in_clean_context']} | {m['explicit_page_markers_raw']} | "
-                     f"{m['headings_raw']} | {m['tables_raw']} | {len(m['sections'])} | "
+                     f"{m['headings_raw']} | {m['tables_raw']} | {items.get('table', 0)} / {items.get('picture', 0)} | {len(m['sections'])} | "
                      f"{m['unicode_normalizations']} | {m['paragraph_reflows']} | {len(m['visual_pages'])} | "
                      f"{m['removed_blocks']} | {m['repeated_navigation_pages_suppressed']} |")
     lines += ["", "Each raw/clean Markdown file uses `[Page N]` markers. `*_document.json` retains page metadata, raw text, "

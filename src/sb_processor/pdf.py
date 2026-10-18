@@ -48,7 +48,7 @@ def extract_pdf(source: Path, extractor: PdfExtractor = "pymupdf") -> str:
     return result
 
 
-def compare_pdf_extractors(source: Path, output_root: Path) -> Path:
+def compare_pdf_extractors(source: Path, output_root: Path, *, include_docling: bool = False) -> Path:
     """Save raw/clean conversions and provenance reports without an LLM call."""
     from .comparison import compare_pdf_extractors as compare
-    return compare(source, output_root)
+    return compare(source, output_root, include_docling=include_docling)
