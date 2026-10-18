@@ -52,6 +52,7 @@ class UniversityWorkflow:
         }
         return {"source_text": source_text, "pdf_extractor": self.pdf_extractor,
                 "candidate_terms": [source.parent.name],
+                "required_note_types": ["lecture"],
                 "document_completeness": document.completeness.model_dump(mode="json"),
                 "visual_page_statuses": [{"page_number": page.page_number, "status": page.visual_processing_status.value,
                                           "flags": page.visual_flags, "error": page.visual_error}

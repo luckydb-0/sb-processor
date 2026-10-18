@@ -102,6 +102,10 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         retrievals.extend(retrieve_candidate(registry, candidate.proposed_name, [], policy, None,
                                              note_type="map", top_k=candidate_top_k)
                           for candidate in analysis.candidate_maps)
+        retrievals.extend(retrieve_candidate(registry, candidate.proposed_name, [], policy, None,
+                                             note_type=candidate.note_type, top_k=candidate_top_k)
+                          for candidate in analysis.source_note_candidates
+                          if candidate.note_type in policy.roots)
     finally:
         if owned_index is not None:
             owned_index.close()
@@ -122,7 +126,7 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
     context = request.model_dump(mode="json")
     relevant_paths = {path for result in retrievals for path in result.loaded_bodies}
     log.info("Pass 1: %d concepts; Pass 2: %d candidates, %d bodies, %d request characters",
-             len(analysis.candidate_concepts), len(request.candidate_existing_notes),
+             len(analysis.candidate_concepts), diagnostics.candidate_notes_selected,
              len(relevant_paths), diagnostics.total_request_chars)
     try:
         draft = LLMProposal.model_validate(llm.generate_processing_proposal(context=context))
@@ -188,12 +192,17 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
     resolved_names = {item.candidate_name.casefold() for item in draft.concept_resolutions}
     for missing in sorted(discovered_names - resolved_names):
         review_items.append(f"No explicit concept resolution returned for discovered candidate: {missing}")
+    proposed_types = {item.note_type for item in draft.note_changes}
+    for missing in sorted(set(workflow_context.get("required_note_types", [])) - proposed_types):
+        review_items.append(f"Workflow-required note type omitted from proposal: {missing}")
     proposal = ProcessingProposal(workflow=workflow.name, source=str(source), source_summary=draft.source_summary,
                                   vault_note_count=note_count, note_changes=changes, review_required=review_items,
                                   source_completeness=completeness, concept_resolutions=draft.concept_resolutions)
     wikilinks = audit_wikilinks(changes, registry.metadata())
+    retrieval_audit = [{**item, "semantic_observations": [vars(obs) for obs in result.semantic_observations]}
+                       for item, result in zip(context["candidate_evidence"], retrievals, strict=True)]
     return stage_proposal(stage, proposal, context, safe_paths, diagnostics,
                           pass1_context=discovery_context, pass1_diagnostics=discovery_diagnostics,
                           source_analysis=analysis.model_dump(mode="json"),
-                          retrieval_evidence=context["candidate_evidence"], semantic_stats=semantic_stats,
+                          retrieval_evidence=retrieval_audit, semantic_stats=semantic_stats,
                           wikilink_audit=wikilinks)

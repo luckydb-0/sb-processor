@@ -69,11 +69,19 @@ class CandidateMap(StrictModel):
     reason: str
 
 
+class CandidateSourceNote(StrictModel):
+    note_type: str
+    proposed_name: str
+    source_pages: list[int] = Field(default_factory=list)
+    reason: str
+
+
 class SourceAnalysis(StrictModel):
     source_identity: str
     candidate_concepts: list[CandidateConcept]
     candidate_maps: list[CandidateMap]
     source_level_observations: list[str]
+    source_note_candidates: list[CandidateSourceNote] = Field(default_factory=list)
 
 
 class ConceptRelation(str, Enum):

@@ -178,7 +178,7 @@ def retrieve_candidate(registry: Registry, name: str, aliases: list[str], policy
         raise ValueError("top_k must be positive and threshold must be between 0 and 1")
     metadata = registry.metadata()
     allowed = {n.path: n for n in metadata if policy.kind(n) == note_type}
-    excluded = [ExcludedNote(n.path, "retrieval policy or wrong note type") for n in metadata if n.path not in allowed]
+    excluded = [ExcludedNote(n.path, "retrieval policy") for n in metadata if policy.kind(n) is None]
     hits: dict[str, CandidateMatch] = {}
     for note in allowed.values():
         match = _match(note, [name, *aliases], "", note_type)

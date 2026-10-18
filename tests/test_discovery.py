@@ -36,6 +36,14 @@ def test_source_analysis_rejects_vault_actions():
         ], "candidate_maps": [], "source_level_observations": []})
 
 
+def test_discovery_can_name_source_level_notes_without_vault_action():
+    analysis = SourceAnalysis.model_validate({"source_identity": "Machine Learning lecture 01",
+        "candidate_concepts": [], "candidate_maps": [], "source_level_observations": [],
+        "source_note_candidates": [{"note_type": "lecture", "proposed_name": "Machine Learning - 01 - Introduction",
+                                    "source_pages": [1], "reason": "Lecture title appears on first page"}]})
+    assert analysis.source_note_candidates[0].note_type == "lecture"
+
+
 def test_openai_discovery_uses_structured_output():
     class Responses:
         def parse(self, **kwargs):

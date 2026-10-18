@@ -61,6 +61,8 @@ def test_data_mining_body_reaches_second_pass_after_discovery(tmp_path):
     assert llm.second["relevant_existing_notes"][0]["path"] == "Dots/Data Mining.md"
     assert "Existing body" in llm.second["relevant_existing_notes"][0]["body"]
     assert llm.second["candidate_evidence"][0]["retrieved"][0]["semantic_score"] == .73
+    assert "semantic_observations" not in llm.second["candidate_evidence"][0]
+    assert json.loads((run / "retrieval_evidence.json").read_text())[0]["semantic_observations"][0]["score"] == .73
     assert llm.second["candidate_existing_notes"] == []  # metadata lives only in per-candidate evidence
     assert "README" not in str(llm.second)
     assert json.loads((run / "proposal.json").read_text())["note_changes"][0]["action"] == "UPDATE"

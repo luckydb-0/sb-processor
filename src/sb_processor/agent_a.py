@@ -38,6 +38,7 @@ class AgentARequest(StrictModel):
     path_instruction: str
     source_analysis: SourceAnalysis | None = None
     candidate_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    workflow_required_note_types: list[str] = Field(default_factory=list)
 
 
 class AgentADiscoveryRequest(StrictModel):
@@ -50,6 +51,7 @@ class AgentADiscoveryRequest(StrictModel):
     workflow_instructions: str = ""
     workflow_prompt: str = ""
     candidate_terms: list[str] = Field(default_factory=list)
+    workflow_required_note_types: list[str] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,7 @@ def build_discovery_request(workflow: str, source: Path, prepared: dict[str, Any
         workflow_instructions=prepared.get("workflow_instructions", prepared.get("instructions", "")),
         workflow_prompt=prepared.get("workflow_prompt", ""),
         candidate_terms=prepared.get("candidate_terms", []),
+        workflow_required_note_types=prepared.get("required_note_types", []),
     )
     serialized = json.dumps(request.model_dump(mode="json"), ensure_ascii=False)
     return request, ContextDiagnostics(
@@ -121,6 +124,7 @@ def build_agent_a_request(workflow: str, source: Path, prepared: dict[str, Any],
                                  for c in candidates if c.path in retrieval.loaded_bodies],
         retrieval_limitation=retrieval.limitation,
         path_instruction=PATH_INSTRUCTION,
+        workflow_required_note_types=prepared.get("required_note_types", []),
     )
     payload = request.model_dump(mode="json")
     candidate_json = json.dumps(payload["candidate_existing_notes"], ensure_ascii=False)
@@ -152,7 +156,9 @@ def build_resolution_request(workflow: str, source: Path, prepared: dict[str, An
     skipped = []
     for result in retrievals:
         for candidate in result.candidates:
-            unique.setdefault(candidate.path, candidate)
+            old = unique.get(candidate.path)
+            if old is None or candidate.score > old.score:
+                unique[candidate.path] = candidate
         bodies.update(result.loaded_bodies)
         for item in result.excluded:
             excluded[item.path] = item
@@ -166,7 +172,6 @@ def build_resolution_request(workflow: str, source: Path, prepared: dict[str, An
     request.candidate_evidence = [
         {"candidate_name": result.candidate_name,
          "retrieved": [item.model_dump(mode="json") for item in result.candidates],
-         "semantic_observations": [vars(item) for item in result.semantic_observations],
          "loaded_body_paths": list(result.loaded_bodies), "skipped_body_paths": result.skipped_bodies}
         for result in retrievals]
     payload = request.model_dump(mode="json")
