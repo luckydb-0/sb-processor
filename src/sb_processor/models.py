@@ -34,6 +34,9 @@ class CandidateMatch(StrictModel):
     filename: str = ""
     aliases: list[str] = Field(default_factory=list)
     maps: list[str] = Field(default_factory=list)
+    retrieval_methods: list[str] = Field(default_factory=list)
+    lexical_score: float | None = None
+    semantic_score: float | None = None
 
 
 class NoteMetadata(StrictModel):

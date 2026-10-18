@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from .models import CandidateMatch, NoteMetadata
 from .registry import Registry, lexical_tokens, normalize
@@ -57,6 +58,24 @@ class RetrievalResult:
     skipped_bodies: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class SemanticObservation:
+    path: str
+    score: float
+    above_threshold: bool
+
+
+@dataclass
+class CandidateRetrieval(RetrievalResult):
+    candidate_name: str = ""
+    semantic_observations: list[SemanticObservation] = field(default_factory=list)
+
+
+class SemanticSearcher(Protocol):
+    def search(self, query: str, *, limit: int) -> list:
+        ...
+
+
 def _phrase_present(phrase: str, source_norm: str) -> bool:
     key = normalize(phrase)
     return bool(key and re.search(r"(?<!\w)" + re.escape(key) + r"(?!\w)", source_norm))
@@ -65,6 +84,10 @@ def _phrase_present(phrase: str, source_norm: str) -> bool:
 def _map_canonical(value: str) -> str:
     key = normalize(value.removesuffix(".md"))
     return key.removesuffix(" map").strip()
+
+
+def _compact(value: str) -> str:
+    return normalize(value).replace(" ", "")
 
 
 def _match(note: NoteMetadata, queries: list[str], source_norm: str, kind: str) -> tuple[str, float] | None:
@@ -80,6 +103,8 @@ def _match(note: NoteMetadata, queries: list[str], source_norm: str, kind: str) 
             match = ("exact_filename", 0.99)
         elif any(key == normalize(alias) for alias in note.aliases):
             match = ("alias", 0.98)
+        elif len(key) >= 5 and any(_compact(query) == _compact(name) for name in names):
+            match = ("normalized_variant", 0.96)
         elif kind == "map" and _map_canonical(query) in {_map_canonical(note.title), _map_canonical(note.filename)}:
             match = ("canonical_name", 0.97)
         else:
@@ -139,6 +164,62 @@ def retrieve_notes(registry: Registry, source_text: str, candidate_terms: list[s
         total_body_chars += len(note.body)
         counts[kind] = counts.get(kind, 0) + 1
     return RetrievalResult(candidates, loaded_bodies, excluded, considered, skipped_bodies=skipped_bodies)
+
+
+def retrieve_candidate(registry: Registry, name: str, aliases: list[str], policy: RetrievalPolicy,
+                       semantic: SemanticSearcher | None = None, *, note_type: str = "concept",
+                       top_k: int = 4, threshold: float = 0.55) -> CandidateRetrieval:
+    """Retrieve a small evidence set for one discovery candidate, independently of all others."""
+    if top_k < 1 or not 0 <= threshold <= 1:
+        raise ValueError("top_k must be positive and threshold must be between 0 and 1")
+    metadata = registry.metadata()
+    allowed = {n.path: n for n in metadata if policy.kind(n) == note_type}
+    excluded = [ExcludedNote(n.path, "retrieval policy or wrong note type") for n in metadata if n.path not in allowed]
+    hits: dict[str, CandidateMatch] = {}
+    for note in allowed.values():
+        match = _match(note, [name, *aliases], "", note_type)
+        if match is None:
+            continue
+        kind, score = match
+        hits[note.path] = CandidateMatch(path=note.path, filename=note.filename, title=note.title,
+                                         note_type=note_type, aliases=note.aliases, maps=note.maps,
+                                         match_kind=kind, score=score, retrieval_methods=[kind],
+                                         lexical_score=score if kind == "lexical" else None)
+    observations = []
+    if note_type == "concept" and semantic is not None:
+        for query in list(dict.fromkeys([name, *aliases]))[:3]:
+            for result in semantic.search(query, limit=max(top_k * 3, 10)):
+                observations.append(SemanticObservation(result.path, result.score, result.score >= threshold))
+                note = allowed.get(result.path)
+                if note is None or result.score < threshold:
+                    continue
+                if result.path not in hits:
+                    hits[result.path] = CandidateMatch(path=note.path, filename=note.filename, title=note.title,
+                        note_type=note_type, aliases=note.aliases, maps=note.maps, match_kind="semantic",
+                        score=result.score, retrieval_methods=["semantic"], semantic_score=result.score)
+                else:
+                    hit = hits[result.path]
+                    hit.semantic_score = max(hit.semantic_score or 0, result.score)
+                    if "semantic" not in hit.retrieval_methods:
+                        hit.retrieval_methods.append("semantic")
+    priority = {"exact_title": 0, "exact_filename": 1, "alias": 2, "canonical_name": 2,
+                "normalized_variant": 3, "lexical": 4, "semantic": 5}
+    ordered = sorted(hits.values(), key=lambda hit: (priority.get(hit.match_kind, 9), -hit.score, hit.path))
+    strong = [hit for hit in ordered if priority.get(hit.match_kind, 9) <= 2]
+    selected = strong + [hit for hit in ordered if hit not in strong][:max(0, top_k-len(strong))]
+    loaded: dict[str, str] = {}
+    skipped: list[str] = []
+    for hit in selected:
+        note = registry.get(hit.path)
+        if note is None:
+            continue
+        if len(note.body) > policy.max_body_chars:
+            skipped.append(hit.path)
+        else:
+            loaded[hit.path] = note.body
+    return CandidateRetrieval(candidates=selected, loaded_bodies=loaded, excluded=excluded,
+                              considered=len(allowed), skipped_bodies=skipped,
+                              candidate_name=name, semantic_observations=observations)
 
 
 def source_candidate_terms(source_text: str, source_name: str) -> list[str]:
