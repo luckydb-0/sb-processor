@@ -50,7 +50,7 @@ sb-processor/
 
 - Vault paths are relative `.md` paths; absolute paths, traversal, and symlink escapes are rejected.
 - Staging and database locations must be outside the vault.
-- A `CREATE` colliding with an existing path or exact title, filename, or alias candidate becomes `REVIEW_REQUIRED`; loose lexical overlap remains visible. An `UPDATE` without its exact existing target and supplied full body becomes `REVIEW_REQUIRED`.
+- A `CREATE` colliding with an existing path or exact title, filename, alias, or canonical Map-name candidate becomes `REVIEW_REQUIRED`; loose lexical overlap remains visible. An `UPDATE` without its exact existing target and supplied full body becomes `REVIEW_REQUIRED`.
 - A textless/scanned PDF fails clearly; OCR is outside this PoC.
 - AnyDoc and PyMuPDF4LLM are optional Python dependencies. AnyDoc is called with `ocr="reject"` to keep conversion local. `compare-pdf` saves raw and cleaned artifacts for all three adapters without an LLM call.
 - Unresolved visual pages gate the proposal call. `--allow-incomplete-visuals` records `PARTIAL`, marks proposed writes `REVIEW_REQUIRED`, and adds a review item.

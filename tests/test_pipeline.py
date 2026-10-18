@@ -252,3 +252,31 @@ def test_loose_lexical_candidate_does_not_force_create_review(tmp_path):
     change = json.loads((run / "proposal.json").read_text())["note_changes"][0]
     assert change["action"] == "CREATE"
     assert change["candidate_existing_notes"][0]["match_kind"] == "lexical"
+
+
+def test_map_canonical_name_collision_requires_review(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / "Maps").mkdir(parents=True)
+    (vault / "Maps" / "Machine Learning.md").write_text("---\ntype: map\n---\n# Machine Learning\nExisting", encoding="utf-8")
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"fixture")
+
+    class Workflow:
+        name = "fixture"
+
+        def prepare(self, source, vault):
+            return {"source_text": "Machine Learning", "suggested_note_roots": {"map": "Maps"}}
+
+    class LLM:
+        def generate_processing_proposal(self, *, context):
+            return LLMProposal(source_summary="Map", review_required=[], note_changes=[
+                DraftChange(action=Action.CREATE, note_type="map", title="Machine Learning - Map",
+                            target_path="Maps/Machine Learning - Map.md", reason="Map",
+                            content="# Machine Learning - Map", sources=["Page 1"]),
+            ])
+
+    run = process_source(vault_path=vault, source_path=source, staging_path=tmp_path / "stage",
+                         database_path=tmp_path / "db.sqlite", workflow=Workflow(), llm=LLM())
+    change = json.loads((run / "proposal.json").read_text())["note_changes"][0]
+    assert change["action"] == "REVIEW_REQUIRED"
+    assert change["candidate_existing_notes"][0]["match_kind"] == "canonical_name"

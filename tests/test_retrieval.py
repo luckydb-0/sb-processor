@@ -68,3 +68,15 @@ def test_alias_mention_gets_body_before_loose_title_mentions(tmp_path):
     assert result.candidates[0].path == "Dots/Predictive Classification.md"
     assert result.candidates[0].match_kind == "alias_mention"
     assert list(result.loaded_bodies) == ["Dots/Predictive Classification.md"]
+
+
+def test_map_suffix_resolves_to_existing_canonical_map(tmp_path):
+    vault = tmp_path / "vault"
+    note(vault, "Maps/Machine Learning.md", "---\ntype: map\n---\n# Machine Learning\nMap body")
+    note(vault, "Dots/Machine Learning.md", "---\ntype: concept\n---\n# Machine Learning\nConcept body")
+    registry = Registry(tmp_path / "registry.sqlite")
+    registry.rebuild(scan_vault(vault))
+    result = retrieve_notes(registry, "", ["Machine Learning - Map"],
+                            RetrievalPolicy(roots={"map": "Maps", "concept": "Dots"}), load_bodies=False)
+    assert result.candidates[0].path == "Maps/Machine Learning.md"
+    assert result.candidates[0].match_kind == "canonical_name"

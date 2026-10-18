@@ -62,7 +62,12 @@ def _phrase_present(phrase: str, source_norm: str) -> bool:
     return bool(key and re.search(r"(?<!\w)" + re.escape(key) + r"(?!\w)", source_norm))
 
 
-def _match(note: NoteMetadata, queries: list[str], source_norm: str) -> tuple[str, float] | None:
+def _map_canonical(value: str) -> str:
+    key = normalize(value.removesuffix(".md"))
+    return key.removesuffix(" map").strip()
+
+
+def _match(note: NoteMetadata, queries: list[str], source_norm: str, kind: str) -> tuple[str, float] | None:
     names = [note.title, note.filename.removesuffix(".md"), *note.aliases]
     best: tuple[str, float] | None = None
     for query in queries:
@@ -75,6 +80,8 @@ def _match(note: NoteMetadata, queries: list[str], source_norm: str) -> tuple[st
             match = ("exact_filename", 0.99)
         elif any(key == normalize(alias) for alias in note.aliases):
             match = ("alias", 0.98)
+        elif kind == "map" and _map_canonical(query) in {_map_canonical(note.title), _map_canonical(note.filename)}:
+            match = ("canonical_name", 0.97)
         else:
             qwords = lexical_tokens(query)
             nwords = lexical_tokens(" ".join(names))
@@ -106,7 +113,7 @@ def retrieve_notes(registry: Registry, source_text: str, candidate_terms: list[s
             excluded.append(ExcludedNote(note.path, "retrieval policy"))
             continue
         considered += 1
-        match = _match(note, candidate_terms, source_norm)
+        match = _match(note, candidate_terms, source_norm, kind)
         if match is None:
             continue
         candidates.append(CandidateMatch(path=note.path, filename=note.filename, title=note.title, note_type=kind,
