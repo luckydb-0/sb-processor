@@ -122,7 +122,7 @@ def select_analysis_candidates(analysis: SourceAnalysis, *, max_concepts: int
 
 
 def enrich_definition_candidates(analysis: SourceAnalysis, source_text: str) -> SourceAnalysis:
-    """Preserve explicit 'What is X?' definition headings the LLM may omit in a broad source."""
+    """Preserve short explicit 'What is a/an X?' definition headings the LLM may omit."""
     concepts = list(analysis.candidate_concepts)
     known = {normalize(c.proposed_name).replace(" ", "") for c in concepts}
     page = None
@@ -131,7 +131,7 @@ def enrich_definition_candidates(analysis: SourceAnalysis, source_text: str) -> 
         if marker:
             page = int(marker.group(1))
             continue
-        heading = re.fullmatch(r"(?i)What is (?:an? |the )(.{3,70}?)\?", line.strip())
+        heading = re.fullmatch(r"(?i)What is (?:an? )(.{3,45}?)\?", line.strip())
         if heading is None:
             continue
         term = heading.group(1).strip()

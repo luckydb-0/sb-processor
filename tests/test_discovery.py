@@ -86,3 +86,5 @@ def test_open_ended_question_is_not_promoted_to_concept():
                               candidate_maps=[], source_level_observations=[])
     enriched = enrich_definition_candidates(analysis, "[Page 34]\nTEXT:\nWhat is typical cell phone usage of this customer segment?")
     assert enriched.candidate_concepts == []
+    enriched = enrich_definition_candidates(analysis, "[Page 34]\nTEXT:\nWhat is the typical cell phone usage of this customer segment?")
+    assert enriched.candidate_concepts == []
