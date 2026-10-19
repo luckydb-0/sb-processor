@@ -1,6 +1,6 @@
 # Second Brain processor PoC
 
-A command-line proof of concept for processing sources against an Obsidian vault. It indexes Markdown notes in disposable SQLite and local Qdrant indexes, extracts and cleans a source PDF, runs two structured Agent A passes, checks target paths and possible matches, and saves drafts for review. It **never writes to the vault**.
+A command-line proof of concept for processing sources against an Obsidian vault. It indexes Markdown notes in disposable SQLite and local Qdrant indexes, extracts and cleans a source PDF, runs two structured Agent A passes, and can run an independent Agent B review. It **never writes to the vault**.
 
 The only processing workflow currently implemented is `university`, for one lecture PDF at a time. Normal runs use the compact University Processing Instructions and templates from the vault. The long University Material Processing Rules remain reference material and enter a request only when explicitly selected with `--rules`.
 
@@ -39,11 +39,17 @@ python -m sb_processor scan --vault ../gd-gdb
 python -m sb_processor lookup 'Guida a Ideaverse'
 python -m sb_processor ingest-pdf --source /path/to/lecture.pdf --vault ../gd-gdb --skip-visual
 python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb
+python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb --with-agent-b
+python -m sb_processor review --run staging/run_<id> --vault ../gd-gdb
 ```
 
 `scan` builds `.data/registry.sqlite`; `lookup` searches that database. `process` rebuilds SQLite, incrementally syncs the local vector index, and writes a proposal to `staging/run_<UTC timestamp>_<id>/`, never to the vault. Keep `--database`, `--semantic-index`, `--embedding-cache`, and `--staging` outside the vault. Review `review.md`, `proposal.json`, and the Markdown under `notes/` before manually using any draft.
 
 The university workflow expects `University Templates.md` and `Agent A - University Compact Processing Instructions.md` under the vault's `+ Inbox` folder. Use `--templates` and `--instructions` if they live elsewhere. `--rules` explicitly replaces the compact instructions with a long rules file; it cannot be combined with `--instructions`. `--model` selects a Structured Outputs capable OpenAI model (default `gpt-4o-mini`).
+
+Agent B uses the existing `+ Inbox/Agent B - University Processing Review Instructions.md` in the selected vault. Use `review --instructions` or `process --agent-b-instructions` when the rules file is elsewhere. The `review` command operates on an existing staged Agent A run; `--with-agent-b` runs it immediately after Agent A. Agent B checks that the selected vault has the proposal's note count and original hashes for updated notes.
+
+Agent B saves `agent_b/review.json`, `agent_b/report.md`, `agent_b/requests/`, and `agent_b/diagnostics.json` beside the original `proposal.json` and `notes/`. Objective corrected Markdown, when supplied, goes under `agent_b/corrected_notes/`. The original proposal is preserved. Every proposed change receives `PASS`, `FIX`, or `REVIEW_REQUIRED`; the overall status is the highest intervention needed. The reviewer assesses aliases individually and Dot promotion for new Concept Notes. It receives selected source pages from Agent A's provenance and explicit note citations, related existing-note bodies, and original rendered PDF pages for selected visual evidence. Frontmatter, workflow contamination, and wikilinks are checked deterministically. There is no reconciliation or vault-apply stage.
 
 ## PDF ingestion and extractor comparison
 
@@ -99,7 +105,7 @@ conflicts/                duplicate-target drafts when present
 
 The registry supports normalized exact title, filename, alias, path, and note-type queries, plus lexical candidate search. Retrieval returns possible notes, never a semantic-equivalence decision. A `CREATE` with an exact/alias/normalized-variant collision or an existing target becomes `REVIEW_REQUIRED`; loose lexical and semantic overlap stays visible without automatically blocking creation. An `UPDATE` becomes `REVIEW_REQUIRED` if its target does not exist or its full current body was not sent to the model. An ambiguous concept resolution, conflicting existing path, or broad alias pointing to a narrower existing title also requires review. Unsafe paths, paths outside workflow roots, duplicate targets, and missing Markdown content require review. With an explicit incomplete-visual override, proposed writes become `REVIEW_REQUIRED`. Unresolved wikilinks are reported, not blocked. All proposals remain staged only.
 
-All four text extractors run locally and accept text-based PDFs. The `anydoc` path explicitly uses `ocr="reject"`; it never invokes anydoc's hosted OCR, which would send a PDF to Firecrawl. Image-only PDFs need OCR before this PoC can process them. Visual enrichment sends only detector-flagged page images to the configured OpenAI API. Sources over 120,000 cleaned source characters are rejected instead of silently truncated. There is no web app, Agent B execution, or vault write operation.
+All four text extractors run locally and accept text-based PDFs. The `anydoc` path explicitly uses `ocr="reject"`; it never invokes anydoc's hosted OCR, which would send a PDF to Firecrawl. Image-only PDFs need OCR before this PoC can process them. Visual enrichment sends only detector-flagged page images to the configured OpenAI API. Sources over 120,000 cleaned source characters are rejected instead of silently truncated. There is no web app or vault write operation.
 
 ## Tests
 

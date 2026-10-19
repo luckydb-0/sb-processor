@@ -4,7 +4,7 @@
 
 This package reads an Obsidian vault, builds disposable SQLite and local vector indexes, extracts one source, runs two structured Agent A passes, checks draft paths and existing-note matches, and stages the result. It never writes to the vault. The university workflow is the first source adapter; its compact instructions and templates stay in the vault as external inputs.
 
-Pass 1 receives page-aware source evidence, completeness, compact instructions, and no existing Concept Note bodies. It returns `SourceAnalysis` with candidate concepts, maps, source-level note candidates, and observations, without vault actions. A deterministic supplement adds short explicit “What is a/an X?” definition headings missed by the model. A configurable cap keeps the highest-importance concepts for Pass 2 and reports omissions. `retrieval.py` searches each candidate independently against policy-filtered SQLite metadata and local semantic results. Pass 2 receives selected full note bodies and resolves conceptual relationships before returning a validated `ProcessingProposal`. The vector index is a disposable derivative of global `Dots/` knowledge notes. Agent B is outside this milestone.
+Pass 1 receives page-aware source evidence, completeness, compact instructions, and no existing Concept Note bodies. It returns `SourceAnalysis` with candidate concepts, maps, source-level note candidates, and observations, without vault actions. A deterministic supplement adds short explicit “What is a/an X?” definition headings missed by the model. A configurable cap keeps the highest-importance concepts for Pass 2 and reports omissions. `retrieval.py` searches each candidate independently against policy-filtered SQLite metadata and local semantic results. Pass 2 receives selected full note bodies and resolves conceptual relationships before returning a validated `ProcessingProposal`. The vector index is a disposable derivative of global `Dots/` knowledge notes. Agent B independently reviews the staged proposal.
 
 ## Files and responsibilities
 
@@ -19,6 +19,9 @@ sb-processor/
     retrieval.py                 path/type policy and metadata-first ranking
     semantic.py                  FastEmbed ONNX and persistent local Qdrant index
     agent_a.py                   typed request assembly and context diagnostics
+    agent_b_context.py           selective per-change source and retrieval evidence
+    agent_b_validators.py        deterministic note and wikilink checks
+    agent_b.py                   independent structured review runner and staging
     pdf.py                       compatibility wrapper for local PDF options
     extraction.py                page-aware extractor adapters and provenance models
     cleaning.py                  deterministic, auditable document cleanup
@@ -30,6 +33,7 @@ sb-processor/
     staging.py                   staged JSON, Markdown, and report writer
     cli.py                       command-line entry point
     workflows/university.py      university paths and external instructions/templates
+    workflows/university_review.py university review rules and PDF page images
     prompts/university.md        small workflow prompt
     prompts/visual_page.md       visual-only extraction instructions
   tests/                         deterministic behavior and fake-LLM integration
@@ -37,11 +41,11 @@ sb-processor/
 
 ## Data flow
 
-`scan(vault)` returns note records with relative paths, metadata, bodies, mtime, and SHA-256 hashes. `Registry.rebuild` replaces the index in a transaction. Its `lookup` returns exact title, filename, alias, and lexical candidates without asserting equivalence. The existing ingestion modules retain raw page/block text, auditable cleanup, visual flags, and machine-readable completeness. The university workflow sends cleaned page text and page-aligned visual descriptions, normally with only compact instructions and templates. The generic pipeline blocks partial sources unless explicitly overridden, builds `AgentADiscoveryRequest`, calls `LLMClient.analyze_source`, performs per-candidate deterministic and semantic retrieval, then builds `AgentARequest` for `LLMClient.generate_processing_proposal`. Application code reconciles the draft after collision, scope, and path checks. Staging records both pass diagnostics, retrieval evidence, index sync statistics, and proposed wikilinks.
+`scan(vault)` returns note records with relative paths, metadata, bodies, mtime, and SHA-256 hashes. `Registry.rebuild` replaces the index in a transaction. Its `lookup` returns exact title, filename, alias, and lexical candidates without asserting equivalence. The existing ingestion modules retain raw page/block text, auditable cleanup, visual flags, and machine-readable completeness. The university workflow sends cleaned page text and page-aligned visual descriptions, normally with only compact instructions and templates. The generic pipeline blocks partial sources unless explicitly overridden, builds `AgentADiscoveryRequest`, calls `LLMClient.analyze_source`, performs per-candidate deterministic and semantic retrieval, then builds `AgentARequest` for `LLMClient.generate_processing_proposal`. Application code reconciles the draft after collision, scope, and path checks. Staging records both pass diagnostics, retrieval evidence, index sync statistics, and proposed wikilinks. Agent B reads that staging and the external review Markdown, checks the vault snapshot, and reviews each change with selected source pages, retrieval evidence, and original rendered pages when visual evidence was selected. Results and corrections remain separate under `agent_b/`.
 
 ## Schemas
 
-`ExtractedPage` keeps raw and cleaned text, visual flags, visual content, status, and original page number. `ExtractedDocument.completeness` derives `COMPLETE` or `PARTIAL` with processed and unresolved visual page lists. `SourceAnalysis` has candidate concepts (names, observed terms, source pages, importance), maps, source-level note candidates, and observations. Pass 1 cannot issue vault actions. `LLMProposal` has `source_summary`, `note_changes: list[DraftChange]`, `concept_resolutions`, and `review_required`. Concept relations include new, equivalent, broader, narrower, related but distinct, and ambiguous. Each `DraftChange` has `action: CREATE|UPDATE|NO_CHANGE|REVIEW_REQUIRED`, `note_type`, `title`, `target_path`, `reason`, `content` (complete Markdown), and `sources`. `ProcessingProposal` adds the source path, workflow, vault snapshot count, source completeness, concept resolutions, and reconciled `NoteChange` records. A later reviewer can consume this proposal; no reviewer runs in the PoC.
+`ExtractedPage` keeps raw and cleaned text, visual flags, visual content, status, and original page number. `ExtractedDocument.completeness` derives `COMPLETE` or `PARTIAL` with processed and unresolved visual page lists. `SourceAnalysis` has candidate concepts (names, observed terms, source pages, importance), maps, source-level note candidates, and observations. Pass 1 cannot issue vault actions. `LLMProposal` has `source_summary`, `note_changes: list[DraftChange]`, `concept_resolutions`, and `review_required`. Concept relations include new, equivalent, broader, narrower, related but distinct, and ambiguous. Each `DraftChange` has `action: CREATE|UPDATE|NO_CHANGE|REVIEW_REQUIRED`, `note_type`, `title`, `target_path`, `reason`, `content` (complete Markdown), and `sources`. `ProcessingProposal` adds the source path, workflow, vault snapshot count, source completeness, concept resolutions, and reconciled `NoteChange` records. `AgentBRequest` and Structured Outputs `ChangeReview` add per-change evidence, alias relations, and Dot-promotion assessment. The aggregate `ReviewResult` has one status per change and typed issues with proposed corrections and source pages.
 
 ## SQLite
 
