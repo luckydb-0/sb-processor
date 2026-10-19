@@ -31,6 +31,8 @@ class AgentBRequest(StrictModel):
     concept_resolution: dict[str, Any] | None = None
     source_metadata: dict[str, str]
     source_evidence: list[SourcePageEvidence]
+    visual_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    deterministic_findings: list[dict[str, Any]] = Field(default_factory=list)
     source_pages_available: int
     evidence_selection: str
     affected_existing_notes: list[ExistingNoteContext]
@@ -128,6 +130,9 @@ def build_review_request(artifacts: ReviewArtifacts, change: NoteChange, instruc
         concept_resolution=resolution,
         source_metadata=context.get("source_metadata", {}),
         source_evidence=selected,
+        visual_evidence=[{"page_number": page.page_number, "visual_status": page.visual_status,
+                          "original_page_requested": True}
+                         for page in selected if page.visual_extraction and page.visual_status == "COMPLETE"],
         source_pages_available=len(pages),
         evidence_selection=selection,
         affected_existing_notes=existing,
