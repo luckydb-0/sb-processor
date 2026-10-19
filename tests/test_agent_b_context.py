@@ -65,3 +65,20 @@ def test_concept_does_not_borrow_map_provenance(tmp_path: Path):
     (tmp_path / "retrieval_evidence.json").write_text("[]")
     request = build_review_request(load_review_artifacts(tmp_path), change, "RULES")
     assert [page.page_number for page in request.source_evidence] == [1]
+
+
+def test_request_lists_each_proposed_alias_for_explicit_review(tmp_path: Path):
+    change = NoteChange(action=Action.CREATE, note_type="concept", title="Cross-Validation",
+                        target_path="Dots/Cross-Validation.md", reason="fixture",
+                        content="---\ntype: concept\naliases:\n  - K-Fold Cross-Validation\n---\n# Cross-Validation",
+                        sources=[], candidate_existing_notes=[], original_content_hash=None)
+    proposal = ProcessingProposal(workflow="university", source="s.pdf", source_summary="test",
+                                  vault_note_count=0, note_changes=[change], review_required=[])
+    (tmp_path / "proposal.json").write_text(proposal.model_dump_json())
+    (tmp_path / "request_context.json").write_text(json.dumps({"source_metadata": {},
+        "source_text": "[Page 1]\nTEXT:\nCross validation", "relevant_existing_notes": []}))
+    (tmp_path / "source_analysis.json").write_text("{}")
+    (tmp_path / "retrieval_evidence.json").write_text("[]")
+    request = build_review_request(load_review_artifacts(tmp_path), change, "RULES")
+    assert request.aliases_to_review == ["K-Fold Cross-Validation"]
+    assert request.requires_promotion_assessment

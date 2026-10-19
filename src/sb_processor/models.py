@@ -198,6 +198,21 @@ class ReviewResult(StrictModel):
     reviewed_changes: list[ReviewedChange]
 
 
+class AliasAssessment(StrictModel):
+    alias: str
+    status: ReviewStatus
+    explanation: str
+    proposed_correction: str
+
+
+class PromotionAssessment(StrictModel):
+    status: ReviewStatus
+    explanation: str
+    proposed_correction: str
+
+
 class ChangeReview(StrictModel):
     status: ReviewStatus
     issues: list[ReviewIssue]
+    alias_assessments: list[AliasAssessment] = Field(default_factory=list)
+    promotion_assessment: PromotionAssessment | None = None

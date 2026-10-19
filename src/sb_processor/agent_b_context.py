@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import Field
+import yaml
 
 from .agent_a import ExistingNoteContext
 from .extraction import ProcessingCompleteness
-from .models import NoteChange, ProcessingProposal, StrictModel
+from .models import Action, NoteChange, ProcessingProposal, StrictModel
 from .registry import normalize
 
 
@@ -33,6 +34,8 @@ class AgentBRequest(StrictModel):
     source_evidence: list[SourcePageEvidence]
     visual_evidence: list[dict[str, Any]] = Field(default_factory=list)
     deterministic_findings: list[dict[str, Any]] = Field(default_factory=list)
+    aliases_to_review: list[str] = Field(default_factory=list)
+    requires_promotion_assessment: bool = False
     source_pages_available: int
     evidence_selection: str
     affected_existing_notes: list[ExistingNoteContext]
@@ -125,6 +128,18 @@ def build_review_request(artifacts: ReviewArtifacts, change: NoteChange, instruc
                 if item.get("path") in related_paths]
     resolution = next((item.model_dump(mode="json") for item in artifacts.proposal.concept_resolutions
                        if normalize(item.candidate_name) == name or item.existing_path == change.target_path), None)
+    aliases: list[str] = []
+    if change.content.startswith("---\n"):
+        frontmatter = change.content.split("\n---", 1)[0].removeprefix("---\n")
+        try:
+            parsed = yaml.safe_load(frontmatter)
+            if isinstance(parsed, dict) and isinstance(parsed.get("aliases"), list):
+                aliases = [value for value in parsed["aliases"] if isinstance(value, str)]
+        except yaml.YAMLError:
+            pass
+    if not aliases and change.action == Action.NO_CHANGE:
+        aliases = [alias for match in change.candidate_existing_notes if match.path == change.target_path
+                   for alias in match.aliases]
     return AgentBRequest(
         workflow=artifacts.proposal.workflow,
         proposal_change=change,
@@ -138,6 +153,8 @@ def build_review_request(artifacts: ReviewArtifacts, change: NoteChange, instruc
         visual_evidence=[{"page_number": page.page_number, "visual_status": page.visual_status,
                           "original_page_requested": True}
                          for page in selected if page.visual_extraction and page.visual_status == "COMPLETE"],
+        aliases_to_review=aliases,
+        requires_promotion_assessment=change.note_type == "concept" and change.action == Action.CREATE,
         source_pages_available=len(pages),
         evidence_selection=selection,
         affected_existing_notes=existing,
