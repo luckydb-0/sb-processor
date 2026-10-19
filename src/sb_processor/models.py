@@ -146,7 +146,34 @@ class ReviewStatus(str, Enum):
     REVIEW_REQUIRED = "REVIEW_REQUIRED"
 
 
-class ReviewResult(StrictModel):
+class IssueSeverity(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class ReviewIssue(StrictModel):
+    change_path: str
+    issue_type: str
+    severity: IssueSeverity
+    explanation: str
+    proposed_correction: str
+    source_pages: list[int] = Field(default_factory=list)
+    corrected_content: str | None = None
+
+
+class ReviewedChange(StrictModel):
+    change_path: str
     status: ReviewStatus
-    issues: list[str]
-    corrections: list[NoteChange]
+    issue_indices: list[int] = Field(default_factory=list)
+
+
+class ReviewResult(StrictModel):
+    overall_status: ReviewStatus
+    issues: list[ReviewIssue]
+    reviewed_changes: list[ReviewedChange]
+
+
+class ChangeReview(StrictModel):
+    status: ReviewStatus
+    issues: list[ReviewIssue]
