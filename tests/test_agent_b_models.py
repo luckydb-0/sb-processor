@@ -15,3 +15,6 @@ def test_review_result_requires_per_change_structured_findings():
     assert result.issues[0].source_pages == [2]
     with pytest.raises(ValidationError):
         ReviewResult(overall_status="MAYBE", issues=[], reviewed_changes=[])
+    with pytest.raises(ValidationError):
+        ReviewIssue(change_path="Dots/A.md", issue_type="invented_category", severity="high",
+                    explanation="x", proposed_correction="y")

@@ -33,3 +33,9 @@ def test_noncanonical_explicit_path_is_caught():
                           aliases=[], maps=[])]
     issues = validate_change(change("---\ntype: concept\n---\n# A\n[[Dots/B]]"), notes, [])
     assert any(item.issue_type == "link" for item in issues)
+
+
+def test_review_required_without_draft_has_no_frontmatter_error():
+    item = change("")
+    item.action = Action.REVIEW_REQUIRED
+    assert validate_change(item, [], []) == []

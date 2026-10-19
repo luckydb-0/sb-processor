@@ -152,9 +152,33 @@ class IssueSeverity(str, Enum):
     HIGH = "high"
 
 
+class IssueType(str, Enum):
+    SOURCE_FIDELITY = "source_fidelity"
+    CLAIM_STRENGTH = "claim_strength"
+    SOURCE_INDEPENDENT_WORDING = "source_independent_wording"
+    SOURCE_SPECIFIC_RESULT = "source_specific_result"
+    PROVENANCE = "provenance"
+    METADATA = "metadata"
+    DUPLICATE_CONCEPT = "duplicate_concept"
+    EXISTING_NOTE = "existing_note"
+    DOT_PROMOTION = "dot_promotion"
+    CONCEPT_BOUNDARY = "concept_boundary"
+    ALIAS = "alias"
+    LINK = "link"
+    MAP = "map"
+    COURSE = "course"
+    LECTURE = "lecture"
+    VERBOSITY = "verbosity"
+    WORKFLOW_CONTAMINATION = "workflow_contamination"
+    TEMPLATE = "template"
+    NAMING = "naming"
+    CUMULATIVE_INTEGRITY = "cumulative_integrity"
+    EVIDENCE_GAP = "evidence_gap"
+
+
 class ReviewIssue(StrictModel):
     change_path: str
-    issue_type: str
+    issue_type: IssueType
     severity: IssueSeverity
     explanation: str
     proposed_correction: str

@@ -186,7 +186,7 @@ def _stage_review(run: Path, proposal: dict[str, Any], requests: list[AgentBRequ
         lines += [f"## {item.change_path}: {item.status.value}", ""]
         for index in item.issue_indices:
             issue = result.issues[index]
-            lines += [f"- **{issue.issue_type}** ({issue.severity.value}): {issue.explanation}",
+            lines += [f"- **{issue.issue_type.value}** ({issue.severity.value}): {issue.explanation}",
                       f"  Correction: {issue.proposed_correction}"]
         lines.append("")
     (output / "report.md").write_text("\n".join(lines), encoding="utf-8")

@@ -27,7 +27,7 @@ def _issue(change: NoteChange, kind: str, explanation: str, correction: str,
 def validate_change(change: NoteChange, existing: list[NoteMetadata],
                     other_changes: list[NoteChange]) -> list[ReviewIssue]:
     """Validate complete proposed Markdown; semantic ambiguity remains for Agent B."""
-    if change.action == Action.NO_CHANGE:
+    if change.action == Action.NO_CHANGE or (change.action == Action.REVIEW_REQUIRED and not change.content.strip()):
         return []
     issues: list[ReviewIssue] = []
     content = change.content
