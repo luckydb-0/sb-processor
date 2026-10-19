@@ -47,3 +47,21 @@ def test_renamed_concept_uses_overlapping_discovery_provenance(tmp_path: Path):
     (tmp_path / "retrieval_evidence.json").write_text("[]")
     request = build_review_request(load_review_artifacts(tmp_path), change, "RULES")
     assert [page.page_number for page in request.source_evidence] == [14]
+
+
+def test_concept_does_not_borrow_map_provenance(tmp_path: Path):
+    change = NoteChange(action=Action.CREATE, note_type="concept", title="Machine Learning",
+                        target_path="Dots/Machine Learning.md", reason="fixture", content="# Machine Learning",
+                        sources=[], candidate_existing_notes=[], original_content_hash=None)
+    proposal = ProcessingProposal(workflow="university", source="s.pdf", source_summary="test",
+                                  vault_note_count=0, note_changes=[change], review_required=[])
+    (tmp_path / "proposal.json").write_text(proposal.model_dump_json())
+    (tmp_path / "request_context.json").write_text(json.dumps({"source_metadata": {},
+        "source_text": "[Page 1]\nTEXT:\nMachine Learning\n\n[Page 8]\nTEXT:\nMap only",
+        "relevant_existing_notes": []}))
+    (tmp_path / "source_analysis.json").write_text(json.dumps({
+        "candidate_concepts": [{"proposed_name": "Machine Learning", "source_pages": [1]}],
+        "candidate_maps": [{"proposed_name": "Machine Learning - Map", "source_pages": [8]}]}))
+    (tmp_path / "retrieval_evidence.json").write_text("[]")
+    request = build_review_request(load_review_artifacts(tmp_path), change, "RULES")
+    assert [page.page_number for page in request.source_evidence] == [1]

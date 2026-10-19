@@ -90,6 +90,13 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
     instructions = Path(instructions_file).read_text(encoding="utf-8")
     artifacts = load_review_artifacts(run)
     existing = [note for note in scan_vault(vault)]
+    if len(existing) != artifacts.proposal.vault_note_count:
+        raise ValueError("Selected vault snapshot differs from Agent A proposal: note count mismatch")
+    existing_by_path = {note.path: note for note in existing}
+    for change in artifacts.proposal.note_changes:
+        if change.original_content_hash and (change.target_path not in existing_by_path or
+                                             existing_by_path[change.target_path].content_hash != change.original_content_hash):
+            raise ValueError(f"Selected vault snapshot differs from Agent A proposal: {change.target_path}")
     metadata = [note.model_dump(include={"path", "filename", "title", "note_type", "aliases", "maps"})
                 for note in existing]
     from .models import NoteMetadata
@@ -108,7 +115,12 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         response = ChangeReview.model_validate(llm.review_change(request, images))
         if any(issue.change_path != change.target_path for issue in response.issues):
             raise ValueError(f"Agent B returned an issue for a different change: {change.target_path}")
-        issues = [*deterministic, *response.issues]
+        deterministic_links = {issue.explanation.split("[[", 1)[1].split("]]", 1)[0]
+                               for issue in deterministic if issue.issue_type == "link" and "[[" in issue.explanation}
+        semantic_issues = [issue for issue in response.issues
+                           if not (issue.issue_type == "link" and any(f"[[{target}]]" in issue.explanation
+                                                                       for target in deterministic_links))]
+        issues = [*deterministic, *semantic_issues]
         status = response.status
         if issues and status == ReviewStatus.PASS:
             status = ReviewStatus.FIX

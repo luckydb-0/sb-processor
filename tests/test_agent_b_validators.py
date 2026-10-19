@@ -39,3 +39,7 @@ def test_review_required_without_draft_has_no_frontmatter_error():
     item = change("")
     item.action = Action.REVIEW_REQUIRED
     assert validate_change(item, [], []) == []
+
+
+def test_ordinary_create_verb_is_not_workflow_contamination():
+    assert validate_change(change("---\ntype: concept\n---\n# A\nThese steps create a model."), [], []) == []

@@ -15,7 +15,8 @@ _FRONTMATTER = re.compile(r"\A---\s*\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", re.DOTALL)
 _CONTAMINATION = re.compile(
     r"\b(?:Agent A|this batch|current batch|this processing session|current processing|"
     r"available files|no note was found|remaining files have not been processed|"
-    r"the three PDFs processed|CREATE|UPDATE|NO CHANGE)\b", re.IGNORECASE)
+    r"the three PDFs processed)\b", re.IGNORECASE)
+_STATUS_MARKER = re.compile(r"\b(?:CREATE|UPDATE|NO CHANGE)\b")
 
 
 def _issue(change: NoteChange, kind: str, explanation: str, correction: str,
@@ -61,15 +62,20 @@ def validate_change(change: NoteChange, existing: list[NoteMetadata],
                     issues.append(_issue(change, "metadata", f"{key} must be text or blank",
                                          f"Repair {key} frontmatter"))
     body = content[match.end():] if match else content
-    contamination = _CONTAMINATION.search(body)
+    contamination = _CONTAMINATION.search(body) or _STATUS_MARKER.search(body)
     if contamination:
         issues.append(_issue(change, "workflow_contamination",
                              f"Permanent note contains processing text: {contamination.group(0)}",
                              "Remove the processing-state wording from the permanent note"))
     audit = audit_wikilinks([change, *other_changes], existing)
+    seen_links: set[tuple[str, str]] = set()
     for link in audit:
         if link["from"] != change.target_path:
             continue
+        identity = (link["target"], link["status"])
+        if identity in seen_links:
+            continue
+        seen_links.add(identity)
         if link["status"] == "unresolved / ghost link":
             issues.append(_issue(change, "link", f"Unresolved wikilink: [[{link['target']}]]",
                                  "Use a verified canonical target or remove the link"))

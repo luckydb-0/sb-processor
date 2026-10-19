@@ -23,7 +23,7 @@ def _run(tmp_path: Path, *, visual: bool = False) -> tuple[Path, Path]:
                         reason="fixture", content="---\ntype: concept\n---\n# A\nA is supported.",
                         sources=[source.name], candidate_existing_notes=[], original_content_hash=None)
     proposal = ProcessingProposal(workflow="university", source=str(source), source_summary="A",
-                                  vault_note_count=0, note_changes=[change], review_required=[])
+                                  vault_note_count=1, note_changes=[change], review_required=[])
     (run / "proposal.json").write_text(proposal.model_dump_json())
     (run / "request_context.json").write_text(json.dumps({
         "source_metadata": {"filename": source.name}, "source_text": "[Page 1]\nTEXT:\nA is supported" +
@@ -82,3 +82,16 @@ def test_visual_page_image_is_exposed_to_review_client(tmp_path: Path):
     review_staged_run(run, vault, Reviewer())
     diagnostics = json.loads((run / "agent_b" / "diagnostics.json").read_text())
     assert diagnostics["visual_pages_inspected"] == [1]
+
+
+def test_review_rejects_mismatched_vault_before_model_call(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    (vault / "extra.md").write_text("# Extra")
+
+    class Reviewer:
+        def review_change(self, request, visual_images):
+            raise AssertionError("Model must not be called")
+
+    import pytest
+    with pytest.raises(ValueError, match="vault snapshot"):
+        review_staged_run(run, vault, Reviewer())

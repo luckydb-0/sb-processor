@@ -92,9 +92,10 @@ def build_review_request(artifacts: ReviewArtifacts, change: NoteChange, instruc
     context = artifacts.agent_a_context
     pages = _pages(context["source_text"], context.get("visual_page_statuses", []))
     analysis = artifacts.source_analysis
-    identified = []
-    for kind in ("candidate_concepts", "candidate_maps", "source_note_candidates"):
-        identified.extend(analysis.get(kind, []))
+    analysis_key = {"concept": "candidate_concepts", "map": "candidate_maps",
+                    "course": "source_note_candidates", "lecture": "source_note_candidates"}.get(change.note_type)
+    identified = [item for item in analysis.get(analysis_key, [])
+                  if analysis_key != "source_note_candidates" or item.get("note_type") == change.note_type]
     name = normalize(change.title)
     page_numbers = []
     for item in identified:
