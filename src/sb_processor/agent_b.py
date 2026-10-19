@@ -103,9 +103,10 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
     requests: list[AgentBRequest] = []
     visual_inspected: set[int] = set()
     for change in artifacts.proposal.note_changes:
-        deterministic = validate_change(change, note_metadata,
-                                        [item for item in artifacts.proposal.note_changes if item is not change])
         request = adapter.build_request(artifacts, change, instructions)
+        deterministic = validate_change(change, note_metadata,
+                                        [item for item in artifacts.proposal.note_changes if item is not change],
+                                        source_metadata=request.source_metadata)
         request.deterministic_findings = [issue.model_dump(mode="json") for issue in deterministic]
         images = adapter.visual_images(Path(artifacts.proposal.source), request)
         visual_inspected.update(number for number, _ in images)

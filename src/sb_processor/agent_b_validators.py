@@ -26,7 +26,8 @@ def _issue(change: NoteChange, kind: str, explanation: str, correction: str,
 
 
 def validate_change(change: NoteChange, existing: list[NoteMetadata],
-                    other_changes: list[NoteChange]) -> list[ReviewIssue]:
+                    other_changes: list[NoteChange], *,
+                    source_metadata: dict[str, str] | None = None) -> list[ReviewIssue]:
     """Validate complete proposed Markdown; semantic ambiguity remains for Agent B."""
     if change.action == Action.NO_CHANGE or (change.action == Action.REVIEW_REQUIRED and not change.content.strip()):
         return []
@@ -53,14 +54,21 @@ def validate_change(change: NoteChange, existing: list[NoteMetadata],
                                          f"Repair {key} frontmatter"))
             if change.note_type == "lecture":
                 lecture = metadata.get("lecture")
-                if lecture is not None and (not isinstance(lecture, str)
-                                            or not re.fullmatch(r"\d+[a-zA-Z]?", lecture)):
+                if not isinstance(lecture, str) or not re.fullmatch(r"\d+[a-zA-Z]?", lecture):
                     issues.append(_issue(change, "metadata", "Lecture identifier contains a title or invalid format",
                                          "Use only the lecture identifier, e.g. 03a"))
+                if source_metadata and source_metadata.get("filename") and not metadata.get("source_file"):
+                    issues.append(_issue(change, "metadata", "Lecture source_file is missing",
+                                         "Record the original source filename"))
+                if source_metadata and source_metadata.get("path") and not metadata.get("location"):
+                    issues.append(_issue(change, "metadata", "Lecture location is missing",
+                                         "Record the source location"))
             for key in ("course", "institution", "professor", "source_file", "location"):
                 if key in metadata and metadata[key] is not None and not isinstance(metadata[key], str):
                     issues.append(_issue(change, "metadata", f"{key} must be text or blank",
                                          f"Repair {key} frontmatter"))
+            if "year" in metadata and metadata["year"] is not None and not isinstance(metadata["year"], (int, str)):
+                issues.append(_issue(change, "metadata", "year must be a year or blank", "Repair year frontmatter"))
     body = content[match.end():] if match else content
     contamination = _CONTAMINATION.search(body) or _STATUS_MARKER.search(body)
     if contamination:

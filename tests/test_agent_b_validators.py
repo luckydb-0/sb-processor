@@ -43,3 +43,9 @@ def test_review_required_without_draft_has_no_frontmatter_error():
 
 def test_ordinary_create_verb_is_not_workflow_contamination():
     assert validate_change(change("---\ntype: concept\n---\n# A\nThese steps create a model."), [], []) == []
+
+
+def test_lecture_required_metadata_when_source_is_known():
+    item = change("---\ntype: lecture\n---\n# A", note_type="lecture")
+    issues = validate_change(item, [], [], source_metadata={"filename": "s.pdf", "path": "/s.pdf"})
+    assert sum(issue.issue_type == "metadata" for issue in issues) == 3
