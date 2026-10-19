@@ -24,7 +24,7 @@ def test_review_result_requires_per_change_structured_findings():
 def test_change_review_records_alias_and_promotion_decisions():
     review = ChangeReview(status=ReviewStatus.FIX, issues=[], alias_assessments=[
         AliasAssessment(alias="K-Fold Cross-Validation", status=ReviewStatus.FIX,
-                        explanation="Subtype", proposed_correction="Remove alias")],
+                        relation="SUBTYPE", explanation="Subtype", proposed_correction="Remove alias")],
         promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
                                                  explanation="Independent concept", proposed_correction=""))
     assert review.alias_assessments[0].status == ReviewStatus.FIX

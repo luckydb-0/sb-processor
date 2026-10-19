@@ -82,3 +82,37 @@ def test_request_lists_each_proposed_alias_for_explicit_review(tmp_path: Path):
     request = build_review_request(load_review_artifacts(tmp_path), change, "RULES")
     assert request.aliases_to_review == ["K-Fold Cross-Validation"]
     assert request.requires_promotion_assessment
+
+
+def test_explicit_note_page_reference_is_prioritized(tmp_path: Path):
+    change = NoteChange(action=Action.CREATE, note_type="concept", title="A", target_path="Dots/A.md",
+                        reason="fixture", content="---\ntype: concept\n---\n# A\n**Pages/slides:** 3-4",
+                        sources=[], candidate_existing_notes=[], original_content_hash=None)
+    proposal = ProcessingProposal(workflow="university", source="s.pdf", source_summary="test",
+                                  vault_note_count=0, note_changes=[change], review_required=[])
+    (tmp_path / "proposal.json").write_text(proposal.model_dump_json())
+    (tmp_path / "request_context.json").write_text(json.dumps({"source_metadata": {},
+        "source_text": "[Page 1]\nTEXT:\nA\n[Page 3]\nTEXT:\nClaim\n[Page 4]\nTEXT:\nDiagram",
+        "relevant_existing_notes": []}))
+    (tmp_path / "source_analysis.json").write_text(json.dumps({"candidate_concepts": [
+        {"proposed_name": "A", "source_pages": [1]}]}))
+    (tmp_path / "retrieval_evidence.json").write_text("[]")
+    request = build_review_request(load_review_artifacts(tmp_path), change, "RULES", max_pages=2)
+    assert [page.page_number for page in request.source_evidence] == [3, 4]
+
+
+def test_lecture_parenthetical_page_citations_select_pages(tmp_path: Path):
+    change = NoteChange(action=Action.CREATE, note_type="lecture", title="Lecture 1",
+                        target_path="Sources/Lecture 1.md", reason="fixture",
+                        content="---\ntype: lecture\n---\n# Lecture 1\nThe source explains A (pp. 3-4).",
+                        sources=[], candidate_existing_notes=[], original_content_hash=None)
+    proposal = ProcessingProposal(workflow="university", source="s.pdf", source_summary="test",
+                                  vault_note_count=0, note_changes=[change], review_required=[])
+    (tmp_path / "proposal.json").write_text(proposal.model_dump_json())
+    (tmp_path / "request_context.json").write_text(json.dumps({"source_metadata": {},
+        "source_text": "[Page 1]\nTEXT:\nTitle\n[Page 3]\nTEXT:\nA\n[Page 4]\nTEXT:\nB",
+        "relevant_existing_notes": []}))
+    (tmp_path / "source_analysis.json").write_text("{}")
+    (tmp_path / "retrieval_evidence.json").write_text("[]")
+    request = build_review_request(load_review_artifacts(tmp_path), change, "RULES")
+    assert [page.page_number for page in request.source_evidence] == [3, 4]

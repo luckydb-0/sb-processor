@@ -17,7 +17,8 @@ class UniversityReviewAdapter:
 
     def build_request(self, artifacts: ReviewArtifacts, change: NoteChange,
                       instructions: str) -> AgentBRequest:
-        return build_review_request(artifacts, change, instructions)
+        return build_review_request(artifacts, change, instructions,
+                                    max_pages=60 if change.note_type == "lecture" else 8)
 
     def visual_images(self, source: Path, request: AgentBRequest) -> list[tuple[int, str]]:
         numbers = [page.page_number for page in request.source_evidence

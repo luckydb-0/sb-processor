@@ -101,6 +101,18 @@ def build_review_request(artifacts: ReviewArtifacts, change: NoteChange, instruc
                   if analysis_key != "source_note_candidates" or item.get("note_type") == change.note_type]
     name = normalize(change.title)
     page_numbers = []
+    references = [match.group(1) for match in re.finditer(
+        r"(?im)^\s*\*{0,2}(?:Relevant )?Pages/slides:\*{0,2}\s*([^\n]+)", change.content)]
+    if change.note_type == "lecture":
+        references.extend(match.group(1) for match in re.finditer(
+            r"\bpp?\.\s*([\d,\s–-]+)", change.content))
+    for reference in references:
+        for number_range in re.finditer(r"\b(\d+)(?:\s*[-–]\s*(\d+))?\b", reference):
+            first = int(number_range.group(1))
+            last = int(number_range.group(2) or first)
+            if 0 < first <= last and last - first <= 60:
+                page_numbers.extend(range(first, last + 1))
+    explicit_pages = bool(page_numbers)
     for item in identified:
         candidate = normalize(item.get("proposed_name", ""))
         candidate_words = set(candidate.split())
@@ -109,7 +121,7 @@ def build_review_request(artifacts: ReviewArtifacts, change: NoteChange, instruc
                             and len(candidate_words & title_words) / len(candidate_words) >= 0.66)
         if candidate == name or overlapping_name or (candidate and candidate in name and change.note_type in ("course", "lecture")):
             page_numbers.extend(item.get("source_pages", []))
-    selection = "source_analysis provenance"
+    selection = "explicit note page reference and source_analysis provenance" if explicit_pages else "source_analysis provenance"
     if not page_numbers:
         # A title occurrence is only a retrieval hint, never proof of claim support.
         page_numbers = [number for number, page in pages.items() if name and name in normalize(page.text)]

@@ -112,13 +112,15 @@ def test_invalid_alias_and_weak_dot_are_reported_separately(tmp_path: Path):
         def review_change(self, request, visual_images):
             assert request.aliases_to_review == ["K-Fold A"]
             return ChangeReview(status=ReviewStatus.PASS, issues=[], alias_assessments=[AliasAssessment(
-                alias="K-Fold A", status=ReviewStatus.FIX, explanation="Subtype", proposed_correction="Remove alias")],
+                alias="K-Fold A", status=ReviewStatus.REVIEW_REQUIRED, relation="SUBTYPE",
+                explanation="Subtype", proposed_correction="Remove alias")],
                 promotion_assessment=PromotionAssessment(status=ReviewStatus.REVIEW_REQUIRED,
                     explanation="Independent identity unclear", proposed_correction="Human decides"))
 
     result = review_staged_run(run, vault, Reviewer())
     assert result.overall_status == ReviewStatus.REVIEW_REQUIRED
     assert {issue.issue_type for issue in result.issues} == {"alias", "dot_promotion"}
+    assert result.reviewed_changes[0].status == ReviewStatus.REVIEW_REQUIRED  # Dot identity still needs judgment.
 
 
 def test_generic_runner_accepts_a_workflow_review_adapter(tmp_path: Path):
@@ -146,3 +148,22 @@ def test_generic_runner_accepts_a_workflow_review_adapter(tmp_path: Path):
 
     result = review_staged_run(run, vault, Reviewer(), adapter=BookReviewAdapter())
     assert result.overall_status == ReviewStatus.PASS
+
+
+def test_clear_subtype_alias_is_fix_even_if_model_requests_review(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
+    proposal.note_changes[0].content = "---\ntype: concept\naliases: [K-Fold A]\n---\n# A"
+    (run / "proposal.json").write_text(proposal.model_dump_json())
+
+    class Reviewer:
+        def review_change(self, request, visual_images):
+            return ChangeReview(status=ReviewStatus.REVIEW_REQUIRED, issues=[], alias_assessments=[AliasAssessment(
+                alias="K-Fold A", relation="SUBTYPE", status=ReviewStatus.REVIEW_REQUIRED,
+                explanation="A subtype of A", proposed_correction="Review")],
+                promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
+                    explanation="Independent", proposed_correction=""))
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.overall_status == ReviewStatus.FIX
+    assert result.issues[0].proposed_correction.startswith("Remove alias")

@@ -198,8 +198,20 @@ class ReviewResult(StrictModel):
     reviewed_changes: list[ReviewedChange]
 
 
+class AliasRelation(str, Enum):
+    IDENTITY_EQUIVALENT = "IDENTITY_EQUIVALENT"
+    SUBTYPE = "SUBTYPE"
+    VARIANT = "VARIANT"
+    IMPLEMENTATION = "IMPLEMENTATION"
+    PARENT_CHILD = "PARENT_CHILD"
+    RELATED = "RELATED"
+    SOURCE_WORDING = "SOURCE_WORDING"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
 class AliasAssessment(StrictModel):
     alias: str
+    relation: AliasRelation
     status: ReviewStatus
     explanation: str
     proposed_correction: str
