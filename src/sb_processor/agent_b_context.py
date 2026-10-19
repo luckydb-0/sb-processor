@@ -99,7 +99,11 @@ def build_review_request(artifacts: ReviewArtifacts, change: NoteChange, instruc
     page_numbers = []
     for item in identified:
         candidate = normalize(item.get("proposed_name", ""))
-        if candidate == name or (candidate and candidate in name and change.note_type in ("course", "lecture")):
+        candidate_words = set(candidate.split())
+        title_words = set(name.split())
+        overlapping_name = (change.note_type == "concept" and len(candidate_words) >= 2
+                            and len(candidate_words & title_words) / len(candidate_words) >= 0.66)
+        if candidate == name or overlapping_name or (candidate and candidate in name and change.note_type in ("course", "lecture")):
             page_numbers.extend(item.get("source_pages", []))
     selection = "source_analysis provenance"
     if not page_numbers:

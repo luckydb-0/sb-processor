@@ -29,3 +29,21 @@ def test_review_request_selects_provenance_pages_and_affected_notes(tmp_path: Pa
     assert request.source_evidence[0].visual_extraction == "A diagram"
     assert [note.path for note in request.affected_existing_notes] == ["Dots/B.md"]
     assert request.review_instructions == "RULES"
+
+
+def test_renamed_concept_uses_overlapping_discovery_provenance(tmp_path: Path):
+    change = NoteChange(action=Action.CREATE, note_type="concept", title="Knowledge Discovery Process",
+                        target_path="Dots/Knowledge Discovery Process.md", reason="normalized title",
+                        content="---\ntype: concept\n---\n# Knowledge Discovery Process", sources=[],
+                        candidate_existing_notes=[], original_content_hash=None)
+    proposal = ProcessingProposal(workflow="university", source="s.pdf", source_summary="test",
+                                  vault_note_count=0, note_changes=[change], review_required=[])
+    (tmp_path / "proposal.json").write_text(proposal.model_dump_json())
+    (tmp_path / "request_context.json").write_text(json.dumps({"source_metadata": {},
+        "source_text": "[Page 1]\nTEXT:\nUnrelated\n\n[Page 14]\nTEXT:\nDiscovery pipeline",
+        "relevant_existing_notes": []}))
+    (tmp_path / "source_analysis.json").write_text(json.dumps({"candidate_concepts": [
+        {"proposed_name": "Discovery Process", "source_pages": [14]}]}))
+    (tmp_path / "retrieval_evidence.json").write_text("[]")
+    request = build_review_request(load_review_artifacts(tmp_path), change, "RULES")
+    assert [page.page_number for page in request.source_evidence] == [14]
