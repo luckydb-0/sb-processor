@@ -77,6 +77,8 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
     vault = Path(vault).resolve(strict=True)
     if run.is_relative_to(vault):
         raise ValueError("Agent B staging must be outside the real vault")
+    if (run / "agent_b").exists():
+        raise FileExistsError(f"Agent B review already exists in {run}; preserve it before another review")
     artifacts = load_review_artifacts(run)
     if adapter is None:
         if artifacts.proposal.workflow != "university":

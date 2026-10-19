@@ -167,3 +167,18 @@ def test_clear_subtype_alias_is_fix_even_if_model_requests_review(tmp_path: Path
     result = review_staged_run(run, vault, Reviewer())
     assert result.overall_status == ReviewStatus.FIX
     assert result.issues[0].proposed_correction.startswith("Remove alias")
+
+
+def test_review_does_not_overwrite_existing_agent_b_artifacts(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    (run / "agent_b").mkdir()
+    (run / "agent_b" / "review.json").write_text("old result")
+
+    class Reviewer:
+        def review_change(self, request, visual_images):
+            raise AssertionError("Model must not be called")
+
+    import pytest
+    with pytest.raises(FileExistsError, match="already exists"):
+        review_staged_run(run, vault, Reviewer())
+    assert (run / "agent_b" / "review.json").read_text() == "old result"

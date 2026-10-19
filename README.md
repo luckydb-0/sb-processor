@@ -51,6 +51,8 @@ Agent B uses the existing `+ Inbox/Agent B - University Processing Review Instru
 
 Agent B saves `agent_b/review.json`, `agent_b/report.md`, `agent_b/requests/`, and `agent_b/diagnostics.json` beside the original `proposal.json` and `notes/`. Objective corrected Markdown, when supplied, goes under `agent_b/corrected_notes/`. The original proposal is preserved. Every proposed change receives `PASS`, `FIX`, or `REVIEW_REQUIRED`; the overall status is the highest intervention needed. The reviewer assesses aliases individually and Dot promotion for new Concept Notes. It receives selected source pages from Agent A's provenance and explicit note citations, related existing-note bodies, and original rendered PDF pages for selected visual evidence. Frontmatter, workflow contamination, and wikilinks are checked deterministically. There is no reconciliation or vault-apply stage.
 
+The `review` command refuses to overwrite an existing `agent_b/` result. Archive or rename that folder before intentionally rerunning the review.
+
 ## PDF ingestion and extractor comparison
 
 Inspect extraction and visual-page detection without generating a note proposal:
