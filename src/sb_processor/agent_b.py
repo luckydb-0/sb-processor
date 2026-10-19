@@ -2,23 +2,28 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from pathlib import Path
 from typing import Any, Protocol
 
-import pymupdf
-
-from .agent_b_context import AgentBRequest, build_review_request, load_review_artifacts
+from .agent_b_context import AgentBRequest, ReviewArtifacts, load_review_artifacts
 from .agent_b_validators import validate_change
 from .models import (Action, ChangeReview, IssueSeverity, ReviewIssue, ReviewedChange,
-                     ReviewResult, ReviewStatus)
+                     ReviewResult, ReviewStatus, NoteChange)
 from .vault import scan_vault
+from .workflows.university_review import UniversityReviewAdapter
 
 
 class AgentBClient(Protocol):
     def review_change(self, request: AgentBRequest,
                       visual_images: list[tuple[int, str]]) -> ChangeReview: ...
+
+
+class ReviewAdapter(Protocol):
+    def instructions(self, vault: Path) -> str: ...
+    def build_request(self, artifacts: ReviewArtifacts, change: NoteChange,
+                      instructions: str) -> AgentBRequest: ...
+    def visual_images(self, source: Path, request: AgentBRequest) -> list[tuple[int, str]]: ...
 
 
 class OpenAIAgentBClient:
@@ -50,21 +55,6 @@ class OpenAIAgentBClient:
         return ChangeReview.model_validate(response.output_parsed)
 
 
-def _render_selected_visuals(source: Path, request: AgentBRequest) -> list[tuple[int, str]]:
-    numbers = [page.page_number for page in request.source_evidence
-               if page.visual_extraction and page.visual_status == "COMPLETE"]
-    if not numbers or not source.is_file() or source.suffix.lower() != ".pdf":
-        return []
-    output = []
-    with pymupdf.open(source) as document:
-        for number in numbers:
-            if number < 1 or number > len(document):
-                continue
-            png = document[number - 1].get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5), alpha=False).tobytes("png")
-            output.append((number, "data:image/png;base64," + base64.b64encode(png).decode("ascii")))
-    return output
-
-
 def _status(statuses: list[ReviewStatus]) -> ReviewStatus:
     if ReviewStatus.REVIEW_REQUIRED in statuses:
         return ReviewStatus.REVIEW_REQUIRED
@@ -81,14 +71,19 @@ def _safe_correction_path(root: Path, target: str) -> Path | None:
 
 
 def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
-                      *, instructions_path: Path | None = None) -> ReviewResult:
+                      *, instructions_path: Path | None = None,
+                      adapter: ReviewAdapter | None = None) -> ReviewResult:
     run = Path(run).resolve(strict=True)
     vault = Path(vault).resolve(strict=True)
     if run.is_relative_to(vault):
         raise ValueError("Agent B staging must be outside the real vault")
-    instructions_file = instructions_path or vault / "+ Inbox" / "Agent B - University Processing Review Instructions.md"
-    instructions = Path(instructions_file).read_text(encoding="utf-8")
     artifacts = load_review_artifacts(run)
+    if adapter is None:
+        if artifacts.proposal.workflow != "university":
+            raise ValueError(f"No Agent B review adapter for workflow: {artifacts.proposal.workflow}")
+        adapter = UniversityReviewAdapter()
+    instructions = (Path(instructions_path).read_text(encoding="utf-8") if instructions_path
+                    else adapter.instructions(vault))
     existing = [note for note in scan_vault(vault)]
     if len(existing) != artifacts.proposal.vault_note_count:
         raise ValueError("Selected vault snapshot differs from Agent A proposal: note count mismatch")
@@ -108,9 +103,9 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
     for change in artifacts.proposal.note_changes:
         deterministic = validate_change(change, note_metadata,
                                         [item for item in artifacts.proposal.note_changes if item is not change])
-        request = build_review_request(artifacts, change, instructions)
+        request = adapter.build_request(artifacts, change, instructions)
         request.deterministic_findings = [issue.model_dump(mode="json") for issue in deterministic]
-        images = _render_selected_visuals(Path(artifacts.proposal.source), request)
+        images = adapter.visual_images(Path(artifacts.proposal.source), request)
         visual_inspected.update(number for number, _ in images)
         response = ChangeReview.model_validate(llm.review_change(request, images))
         if any(issue.change_path != change.target_path for issue in response.issues):

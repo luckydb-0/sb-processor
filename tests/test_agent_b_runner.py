@@ -119,3 +119,30 @@ def test_invalid_alias_and_weak_dot_are_reported_separately(tmp_path: Path):
     result = review_staged_run(run, vault, Reviewer())
     assert result.overall_status == ReviewStatus.REVIEW_REQUIRED
     assert {issue.issue_type for issue in result.issues} == {"alias", "dot_promotion"}
+
+
+def test_generic_runner_accepts_a_workflow_review_adapter(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
+    proposal.workflow = "book"
+    (run / "proposal.json").write_text(proposal.model_dump_json())
+
+    class BookReviewAdapter:
+        def instructions(self, vault):
+            return "BOOK RULES"
+
+        def build_request(self, artifacts, change, instructions):
+            from sb_processor.agent_b_context import build_review_request
+            return build_review_request(artifacts, change, instructions)
+
+        def visual_images(self, source, request):
+            return []
+
+    class Reviewer:
+        def review_change(self, request, visual_images):
+            assert request.workflow == "book" and request.review_instructions == "BOOK RULES"
+            return ChangeReview(status=ReviewStatus.PASS, issues=[], promotion_assessment=PromotionAssessment(
+                status=ReviewStatus.PASS, explanation="Independent", proposed_correction=""))
+
+    result = review_staged_run(run, vault, Reviewer(), adapter=BookReviewAdapter())
+    assert result.overall_status == ReviewStatus.PASS
