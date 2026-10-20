@@ -236,10 +236,25 @@ class ReviewedChange(StrictModel):
     issue_indices: list[int] = Field(default_factory=list)
 
 
+class GlobalReviewIssue(StrictModel):
+    category: ReviewCategory
+    status: ReviewStatus
+    affected_paths: list[str]
+    explanation: str
+    recommendation: str
+    supporting_issue_indices: list[int] = Field(default_factory=list)
+
+
+class GlobalBatchReview(StrictModel):
+    issues: list[GlobalReviewIssue]
+    summary: str
+
+
 class ReviewResult(StrictModel):
     overall_status: ReviewStatus
     issues: list[ReviewIssue]
     reviewed_changes: list[ReviewedChange]
+    global_review: GlobalBatchReview | None = None
 
 
 class AliasRelation(str, Enum):
@@ -259,12 +274,16 @@ class AliasAssessment(StrictModel):
     status: ReviewStatus
     explanation: str
     proposed_correction: str
+    evidence_refs: list[SourceReference] = Field(default_factory=list)
 
 
 class PromotionAssessment(StrictModel):
     status: ReviewStatus
     explanation: str
     proposed_correction: str
+    substantive_content: bool | None = None
+    foundational_identity: bool | None = None
+    evidence_refs: list[SourceReference] = Field(default_factory=list)
 
 
 class ChangeReview(StrictModel):

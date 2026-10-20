@@ -4,11 +4,16 @@ from pathlib import Path
 import pymupdf
 
 from sb_processor.agent_b import review_staged_run
-from sb_processor.models import ReviewCheck, CheckStatus
+from sb_processor.models import ReviewCheck, CheckStatus, GlobalBatchReview
 from sb_processor.review_checks import required_checks
 
 def _checks():
     return [ReviewCheck(category=category, status=CheckStatus.PASS) for category in required_checks("concept")]
+
+class _ReviewBatchMixin:
+    def review_batch(self, request):
+        assert request.changes
+        return GlobalBatchReview(issues=[], summary="No cross-note findings")
 
 from sb_processor.models import (Action, AliasAssessment, ChangeReview, NoteChange, ProcessingProposal,
                                  PromotionAssessment,
@@ -47,7 +52,7 @@ def test_pass_stages_separate_review_and_preserves_proposal(tmp_path: Path):
     run, vault = _run(tmp_path)
     original = (run / "proposal.json").read_bytes()
 
-    class Reviewer:
+    class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             assert "Detecting a problem does NOT grant permission" in request.review_instructions
             assert [p.page_number for p in request.source_evidence] == [1]
@@ -57,7 +62,8 @@ def test_pass_stages_separate_review_and_preserves_proposal(tmp_path: Path):
     result = review_staged_run(run, vault, Reviewer())
     assert result.overall_status == ReviewStatus.PASS
     assert (run / "agent_b" / "review.json").exists()
-    assert (run / "agent_b" / "report.md").exists()
+    assert (run / "agent_b" / "detailed_report.md").exists()
+    assert (run / "SUMMARY.md").exists()
     assert (run / "agent_b" / "diagnostics.json").exists()
     assert (run / "proposal.json").read_bytes() == original
 
@@ -65,7 +71,7 @@ def test_pass_stages_separate_review_and_preserves_proposal(tmp_path: Path):
 def test_semantic_issue_becomes_review_required_without_mutating_original(tmp_path: Path):
     run, vault = _run(tmp_path)
 
-    class Reviewer:
+    class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             return ChangeReview(checks=_checks(), status=ReviewStatus.REVIEW_REQUIRED, issues=[ReviewIssue(
                 change_path=request.proposal_change.target_path, issue_type="concept_boundary", severity="high",
@@ -81,7 +87,7 @@ def test_semantic_issue_becomes_review_required_without_mutating_original(tmp_pa
 def test_visual_page_image_is_exposed_to_review_client(tmp_path: Path):
     run, vault = _run(tmp_path, visual=True)
 
-    class Reviewer:
+    class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             assert request.source_evidence[0].visual_extraction == "A diagram"
             assert len(visual_images) == 1
@@ -99,7 +105,7 @@ def test_review_rejects_mismatched_vault_before_model_call(tmp_path: Path):
     run, vault = _run(tmp_path)
     (vault / "extra.md").write_text("# Extra")
 
-    class Reviewer:
+    class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             raise AssertionError("Model must not be called")
 
@@ -114,7 +120,7 @@ def test_invalid_alias_and_weak_dot_are_reported_separately(tmp_path: Path):
     proposal.note_changes[0].content = "---\ntype: concept\naliases: [K-Fold A]\n---\n# A"
     (run / "proposal.json").write_text(proposal.model_dump_json())
 
-    class Reviewer:
+    class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             assert request.aliases_to_review == ["K-Fold A"]
             return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[], alias_assessments=[AliasAssessment(
@@ -146,7 +152,7 @@ def test_generic_runner_accepts_a_workflow_review_adapter(tmp_path: Path):
         def visual_images(self, source, request):
             return []
 
-    class Reviewer:
+    class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             assert request.workflow == "book" and request.review_instructions == "BOOK RULES"
             return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[], promotion_assessment=PromotionAssessment(
@@ -162,7 +168,7 @@ def test_clear_subtype_alias_is_fix_even_if_model_requests_review(tmp_path: Path
     proposal.note_changes[0].content = "---\ntype: concept\naliases: [K-Fold A]\n---\n# A"
     (run / "proposal.json").write_text(proposal.model_dump_json())
 
-    class Reviewer:
+    class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             return ChangeReview(checks=_checks(), status=ReviewStatus.REVIEW_REQUIRED, issues=[], alias_assessments=[AliasAssessment(
                 alias="K-Fold A", relation="SUBTYPE", status=ReviewStatus.REVIEW_REQUIRED,
@@ -180,7 +186,7 @@ def test_review_does_not_overwrite_existing_agent_b_artifacts(tmp_path: Path):
     (run / "agent_b").mkdir()
     (run / "agent_b" / "review.json").write_text("old result")
 
-    class Reviewer:
+    class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             raise AssertionError("Model must not be called")
 

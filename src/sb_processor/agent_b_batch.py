@@ -1,0 +1,81 @@
+"""Lean cross-note review and deterministic grouping for human review."""
+
+from __future__ import annotations
+
+import re
+from collections import defaultdict
+
+from pydantic import Field
+
+from .models import GlobalBatchReview, ProcessingProposal, ReviewIssue, ReviewResult, StrictModel
+
+
+class BatchReviewRequest(StrictModel):
+    workflow: str
+    source_summary: str
+    changes: list[dict]
+    individual_issues: list[dict]
+    equivalence: list[dict] = Field(default_factory=list)
+    instructions: str
+
+
+def build_batch_request(proposal: ProcessingProposal, result: ReviewResult) -> BatchReviewRequest:
+    by_path = {item.change_path: item for item in result.reviewed_changes}
+    return BatchReviewRequest(
+        workflow=proposal.workflow,
+        source_summary=proposal.source_summary[:1200],
+        changes=[{
+            "path": change.target_path, "title": change.title, "type": change.note_type,
+            "action": change.action.value, "status": by_path[change.target_path].status.value,
+            "checks": {check.category.value: check.status.value for check in by_path[change.target_path].checks},
+        } for change in proposal.note_changes],
+        individual_issues=[{"index": index, "path": issue.change_path, "type": issue.issue_type.value,
+                            "explanation": issue.explanation[:300], "evidence_refs": [ref.model_dump(mode="json")
+                                for ref in issue.evidence_refs], "source_pages": issue.source_pages}
+                           for index, issue in enumerate(result.issues)],
+        equivalence=[{"candidate": item.candidate_name, "relation": item.relation.value,
+                      "existing_path": item.existing_path} for item in proposal.concept_resolutions],
+        instructions=("Inspect batch-level duplicate concepts, inconsistent naming/aliases/boundaries, "
+                      "systematic provenance or source wording mistakes, Dot proliferation, Map/Course/Lecture "
+                      "relationships, and repeated issues. Use only the summaries and supplied issue evidence. "
+                      "Do not infer source facts or invent corrections. Cite supporting_issue_indices. "
+                      "Return only cross-note patterns or decisions; no duplicate per-note issue list."),
+    )
+
+
+def validate_batch_review(batch: GlobalBatchReview, request: BatchReviewRequest) -> None:
+    paths = {item["path"] for item in request.changes}
+    indices = {item["index"] for item in request.individual_issues}
+    for issue in batch.issues:
+        if not issue.affected_paths or not set(issue.affected_paths) <= paths:
+            raise ValueError("Global review referenced an unknown or empty affected path set")
+        if not set(issue.supporting_issue_indices) <= indices:
+            raise ValueError("Global review referenced unknown individual issues")
+
+
+def _root_key(issue: ReviewIssue) -> tuple[str, str]:
+    explanation = issue.explanation
+    if issue.issue_type.value == "link":
+        match = re.search(r"\[\[([^\]]+)\]\]", explanation)
+        if match:
+            return "link", match.group(1).casefold()
+    if issue.issue_type.value == "provenance" and "PDF metadata" in explanation:
+        return "provenance", "direct PDF metadata"
+    if issue.issue_type.value == "naming" and "Map filename collides" in explanation:
+        return "naming", "Map filename collision"
+    return issue.issue_type.value, explanation.casefold()
+
+
+def systematic_issue_groups(issues: list[ReviewIssue]) -> list[dict]:
+    groups: dict[tuple[str, str], list[tuple[int, ReviewIssue]]] = defaultdict(list)
+    for index, issue in enumerate(issues):
+        groups[_root_key(issue)].append((index, issue))
+    output = []
+    for (kind, root), members in groups.items():
+        paths = sorted({issue.change_path for _, issue in members})
+        if len(paths) < 2:
+            continue
+        output.append({"issue_type": kind, "root": root, "affected_paths": paths,
+                       "count": len(paths), "issue_indices": [index for index, _ in members],
+                       "recommendation": members[0][1].proposed_correction})
+    return sorted(output, key=lambda item: (-item["count"], item["root"]))

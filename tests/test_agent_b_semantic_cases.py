@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from sb_processor.agent_b import review_staged_run
-from sb_processor.models import ReviewCheck, CheckStatus
+from sb_processor.models import ReviewCheck, CheckStatus, GlobalBatchReview
 from sb_processor.review_checks import required_checks
 
 def _checks():
@@ -43,6 +43,9 @@ def test_semantic_findings_have_per_change_status_and_source_evidence(
     (run / "retrieval_evidence.json").write_text("[]")
 
     class Reviewer:
+        def review_batch(self, request):
+            return GlobalBatchReview(issues=[], summary="No cross-note findings")
+
         def review_change(self, request, visual_images):
             assert request.source_evidence[0].page_number == 2
             return ChangeReview(checks=_checks(), status=status, issues=[ReviewIssue(
