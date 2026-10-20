@@ -134,8 +134,13 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         constrain_corrections(request, response)
         evidence_supported_alias_relation(request, response)
         bind_issue_references(request, response)
-        if any(issue.change_path != change.target_path for issue in response.issues):
-            raise ValueError(f"Agent B returned an issue for a different change: {change.target_path}")
+        foreign = [issue for issue in response.issues if issue.change_path != change.target_path]
+        if foreign:
+            response.issues = [issue for issue in response.issues if issue.change_path == change.target_path]
+            if response.status == ReviewStatus.REVIEW_REQUIRED and not any(
+                    issue.issue_type.value in {"concept_boundary", "duplicate_concept", "dot_promotion", "evidence_gap"}
+                    for issue in response.issues):
+                response.status = ReviewStatus.FIX if response.issues else ReviewStatus.PASS
         for issue in response.issues:
             if not issue.evidence_refs and not issue.source_pages:
                 raise ValueError(f"Agent B semantic issue lacks evidence reference: {change.target_path}: {issue.issue_type.value}")

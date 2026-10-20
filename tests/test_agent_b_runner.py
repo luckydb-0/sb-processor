@@ -194,3 +194,19 @@ def test_review_does_not_overwrite_existing_agent_b_artifacts(tmp_path: Path):
     with pytest.raises(FileExistsError, match="already exists"):
         review_staged_run(run, vault, Reviewer())
     assert (run / "agent_b" / "review.json").read_text() == "old result"
+
+
+def test_per_note_review_discards_issue_for_another_change(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            return ChangeReview(checks=_checks(), status=ReviewStatus.REVIEW_REQUIRED,
+                issues=[ReviewIssue(change_path="Dots/Other.md", issue_type="concept_boundary", severity="medium",
+                                    explanation="Other may need split", proposed_correction="Review", source_pages=[1])],
+                promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
+                    explanation="Independent", proposed_correction="", foundational_identity=True))
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert result.issues == []
