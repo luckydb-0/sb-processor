@@ -66,3 +66,22 @@ def test_global_review_does_not_escalate_one_sided_broad_topic_overlap():
         summary="")
     accepted, rejected = filter_unsupported_batch_issues(batch, request)
     assert not accepted.issues and len(rejected) == 1
+
+
+def test_global_semantic_group_needs_support_for_every_affected_note():
+    paths = ["Dots/A.md", "Dots/B.md", "Dots/C.md"]
+    request = build_batch_request(ProcessingProposal(workflow="university", source="s.pdf", source_summary="",
+        vault_note_count=0, note_changes=[NoteChange(action=Action.CREATE, note_type="concept", title=path[5:-3],
+            target_path=path, reason="test", content="# A", sources=[], candidate_existing_notes=[],
+            original_content_hash=None) for path in paths], review_required=[]),
+        ReviewResult(overall_status=ReviewStatus.FIX,
+            issues=[ReviewIssue(change_path=path, issue_type="claim_strength", severity="medium",
+                explanation="Source qualification lost", proposed_correction="Restore qualifier") for path in paths[:2]],
+            reviewed_changes=[ReviewedChange(change_path=path, status=ReviewStatus.FIX,
+                checks=[ReviewCheck(category=item, status=CheckStatus.PASS) for item in required_checks("concept")])
+                for path in paths]))
+    batch = GlobalBatchReview(issues=[GlobalReviewIssue(category="claim_strength", status="REVIEW_REQUIRED",
+        affected_paths=paths, explanation="Pattern", recommendation="Review", supporting_issue_indices=[0, 1])],
+        summary="")
+    accepted, rejected = filter_unsupported_batch_issues(batch, request)
+    assert not accepted.issues and len(rejected) == 1
