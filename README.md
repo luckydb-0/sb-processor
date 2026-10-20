@@ -103,6 +103,14 @@ conflicts/                duplicate-target drafts when present
 
 `request_context.json` contains page-aware extracted source text, selected candidate evidence, and selected vault note content. The diagnostics record instruction, template, source, existing-body, candidate-metadata, and total request sizes; selected bodies; and excluded paths. Token count is a characters/4 estimate. Keep staging local and private. Review all proposed Markdown and original note hashes before any later manual copy or future approval workflow.
 
+## Agent B v1.1 review
+
+Run `sb-processor review --run <staged-run> --vault <matching-vault>` after Agent A staging. Agent B loads the canonical university review document from the vault to verify its presence, then sends the compact operational checklist under `src/sb_processor/prompts/` for each change. Every response must cover the note-type-specific Pydantic checklist. Deterministic metadata, provenance, contamination, naming, and link checks run alongside semantic review. A final batch call receives summaries and individual findings, without the complete source document.
+
+Open `SUMMARY.md` first. `agent_b/detailed_report.md` contains all findings, while `agent_b/review.json`, `agent_b/requests/`, `agent_b/batch_request.json`, and `agent_b/diagnostics.json` preserve the structured audit. Agent B copies the original Agent A proposal and report under `agent_a/`; it keeps the original top-level `proposal.json` for the existing staging contract. Proposed corrections remain separate from Agent A drafts. Review never writes to the vault.
+
+The [protocol mapping](docs/agent_b_protocol_mapping.md) connects each checklist category to the canonical Markdown sections. The [v1.1 evaluation](docs/agent-b-v1.1-evaluation.md) records the exact replay, context size, findings, and freeze decision.
+
 ## What the code checks
 
 The registry supports normalized exact title, filename, alias, path, and note-type queries, plus lexical candidate search. Retrieval returns possible notes, never a semantic-equivalence decision. A `CREATE` with an exact/alias/normalized-variant collision or an existing target becomes `REVIEW_REQUIRED`; loose lexical and semantic overlap stays visible without automatically blocking creation. An `UPDATE` becomes `REVIEW_REQUIRED` if its target does not exist or its full current body was not sent to the model. An ambiguous concept resolution, conflicting existing path, or broad alias pointing to a narrower existing title also requires review. Unsafe paths, paths outside workflow roots, duplicate targets, and missing Markdown content require review. With an explicit incomplete-visual override, proposed writes become `REVIEW_REQUIRED`. Unresolved wikilinks are reported, not blocked. All proposals remain staged only.
