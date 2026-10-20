@@ -17,6 +17,12 @@ _CONTAMINATION = re.compile(
     r"available files|no note was found|remaining files have not been processed|"
     r"the three PDFs processed)\b", re.IGNORECASE)
 _STATUS_MARKER = re.compile(r"\b(?:CREATE|UPDATE|NO CHANGE)\b")
+_SOURCE_DEPENDENT = re.compile(
+    r"\b(?:the lecture|the slides|in (?:this|the) lecture|in this course|"
+    r"the course (?:says|material)|the source presents|in the lecture framing|"
+    r"the available material)\b", re.IGNORECASE)
+_PDF_METADATA = re.compile(r"(?im)^\s*(?:\*\*)?(?:Source|Source file|Location):(?:\*\*)?\s*.*\.pdf\b|"
+                           r"^\s*(?:\*\*)?Location:(?:\*\*)?\s*`?[/~]", re.MULTILINE)
 
 
 def _issue(change: NoteChange, kind: str, explanation: str, correction: str,
@@ -52,6 +58,11 @@ def validate_change(change: NoteChange, existing: list[NoteMetadata],
                                         or any(not isinstance(value, str) for value in metadata[key])):
                     issues.append(_issue(change, "metadata", f"{key} must be a list of strings",
                                          f"Repair {key} frontmatter"))
+            if change.note_type == "concept":
+                for key in ("lecture", "course", "institution", "professor", "year"):
+                    if key in metadata:
+                        issues.append(_issue(change, "metadata", f"Concept frontmatter contains lecture-only field: {key}",
+                                             f"Remove {key} from Concept frontmatter; keep source context in the Lecture Note"))
             if change.note_type == "lecture":
                 lecture = metadata.get("lecture")
                 if not isinstance(lecture, str) or not re.fullmatch(r"\d+[a-zA-Z]?", lecture):
@@ -70,6 +81,27 @@ def validate_change(change: NoteChange, existing: list[NoteMetadata],
             if "year" in metadata and metadata["year"] is not None and not isinstance(metadata["year"], (int, str)):
                 issues.append(_issue(change, "metadata", "year must be a year or blank", "Repair year frontmatter"))
     body = content[match.end():] if match else content
+    if change.note_type == "concept":
+        pdf_keys = [key for key in ("source_file", "location") if match and isinstance(metadata, dict) and key in metadata]
+        source_section = body.split("## Sources", 1)[1] if "## Sources" in body else ""
+        if pdf_keys or _PDF_METADATA.search(source_section):
+            issues.append(_issue(change, "provenance", "Concept Note duplicates direct PDF metadata",
+                                 "Keep the Lecture Note wikilink and page reference; remove direct PDF source_file/location metadata"))
+        explanatory_body = body.split("## Sources", 1)[0]
+        phrase = _SOURCE_DEPENDENT.search(explanatory_body)
+        if phrase:
+            issues.append(_issue(change, "source_independent_wording",
+                                 f"Concept body has possibly source-dependent wording: {phrase.group(0)}",
+                                 "Check whether source identity matters; otherwise minimally rewrite the phrase"))
+    if change.note_type == "map":
+        stem = change.target_path.rsplit("/", 1)[-1].removesuffix(".md")
+        collision = any(note.note_type == "concept" and normalize(note.filename.removesuffix(".md")) == normalize(stem)
+                        for note in existing)
+        collision |= any(item.note_type == "concept" and normalize(item.target_path.rsplit("/", 1)[-1].removesuffix(".md")) == normalize(stem)
+                         for item in other_changes)
+        if collision and not stem.endswith(" - Map"):
+            issues.append(_issue(change, "naming", f"Map filename collides with a Concept Note: {stem}.md",
+                                 f"Rename Map target to {stem} - Map.md and update links"))
     contamination = _CONTAMINATION.search(body) or _STATUS_MARKER.search(body)
     if contamination:
         issues.append(_issue(change, "workflow_contamination",

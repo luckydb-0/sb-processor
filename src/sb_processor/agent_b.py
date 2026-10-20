@@ -108,7 +108,10 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         deterministic = validate_change(change, note_metadata,
                                         [item for item in artifacts.proposal.note_changes if item is not change],
                                         source_metadata=request.source_metadata)
+        prechecks = [issue for issue in deterministic if issue.issue_type.value == "source_independent_wording"]
+        deterministic = [issue for issue in deterministic if issue.issue_type.value != "source_independent_wording"]
         request.deterministic_findings = [issue.model_dump(mode="json") for issue in deterministic]
+        request.semantic_prechecks = [issue.model_dump(mode="json") for issue in prechecks]
         images = adapter.visual_images(Path(artifacts.proposal.source), request)
         visual_inspected.update(number for number, _ in images)
         response = ChangeReview.model_validate(llm.review_change(request, images))

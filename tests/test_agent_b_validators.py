@@ -49,3 +49,30 @@ def test_lecture_required_metadata_when_source_is_known():
     item = change("---\ntype: lecture\n---\n# A", note_type="lecture")
     issues = validate_change(item, [], [], source_metadata={"filename": "s.pdf", "path": "/s.pdf"})
     assert sum(issue.issue_type == "metadata" for issue in issues) == 3
+
+
+def test_concept_direct_pdf_provenance_is_objective_fix():
+    item = change('---\ntype: concept\nsource_file: lecture.pdf\nlocation: /source/lecture.pdf\n---\n# A\n## Sources\n### [[Lecture 01]]\n**Source:** `lecture.pdf`\n**Location:** `/source/lecture.pdf`')
+    issues = validate_change(item, [], [])
+    assert any(issue.issue_type == "provenance" for issue in issues)
+    assert all("Lecture" in issue.proposed_correction for issue in issues if issue.issue_type == "provenance")
+
+
+def test_source_dependent_phrase_is_flagged_for_semantic_review():
+    for phrase in ("The lecture introduces A.", "In the lecture framing, A is defined."):
+        issues = validate_change(change("---\ntype: concept\n---\n# A\n" + phrase), [], [])
+        assert any(issue.issue_type == "source_independent_wording" for issue in issues)
+
+
+def test_map_filename_collision_is_flagged_without_compatibility_mapping():
+    item = change("---\ntype: map\n---\n# Machine Learning", "map")
+    item.title, item.target_path = "Machine Learning", "Atlas/Maps/Machine Learning.md"
+    notes = [NoteMetadata(path="Atlas/Dots/Machine Learning.md", filename="Machine Learning.md",
+                          title="Machine Learning", note_type="concept", aliases=[], maps=[])]
+    issues = validate_change(item, notes, [])
+    assert any(issue.issue_type == "naming" and "Machine Learning - Map.md" in issue.proposed_correction for issue in issues)
+
+
+def test_concept_disallows_lecture_only_frontmatter():
+    issues = validate_change(change("---\ntype: concept\nlecture: 01\ncourse: ML\n---\n# A"), [], [])
+    assert any(issue.issue_type == "metadata" and "lecture" in issue.explanation for issue in issues)

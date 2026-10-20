@@ -35,6 +35,7 @@ class AgentBRequest(StrictModel):
     source_evidence: list[SourcePageEvidence]
     visual_evidence: list[dict[str, Any]] = Field(default_factory=list)
     deterministic_findings: list[dict[str, Any]] = Field(default_factory=list)
+    semantic_prechecks: list[dict[str, Any]] = Field(default_factory=list)
     aliases_to_review: list[str] = Field(default_factory=list)
     requires_promotion_assessment: bool = False
     source_pages_available: int
