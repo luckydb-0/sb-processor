@@ -255,6 +255,7 @@ class ReviewResult(StrictModel):
     issues: list[ReviewIssue]
     reviewed_changes: list[ReviewedChange]
     global_review: GlobalBatchReview | None = None
+    rejected_global_issues: list[GlobalReviewIssue] = Field(default_factory=list)
 
 
 class AliasRelation(str, Enum):

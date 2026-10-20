@@ -53,6 +53,37 @@ def validate_batch_review(batch: GlobalBatchReview, request: BatchReviewRequest)
             raise ValueError("Global review referenced unknown individual issues")
 
 
+def filter_unsupported_batch_issues(batch: GlobalBatchReview, request: BatchReviewRequest):
+    """Keep only cross-note claims that cite matching individual findings."""
+    paths = {item["path"] for item in request.changes}
+    by_index = {item["index"]: item for item in request.individual_issues}
+    relevant_types = {
+        "duplicate_concept": {"duplicate_concept", "concept_boundary"},
+        "concept_boundaries": {"concept_boundary", "duplicate_concept"},
+        "source_fidelity": {"source_fidelity", "claim_strength"},
+        "provenance": {"provenance"},
+        "source_independence": {"source_independent_wording"},
+        "aliases": {"alias"},
+        "dot_promotion": {"dot_promotion"},
+        "links": {"link"},
+        "naming": {"naming"},
+        "cumulative_integrity": {"cumulative_integrity", "existing_note", "duplicate_concept"},
+    }
+    accepted, rejected = [], []
+    for issue in batch.issues:
+        support = [by_index[index] for index in issue.supporting_issue_indices if index in by_index]
+        valid = (bool(issue.affected_paths) and set(issue.affected_paths) <= paths
+                 and len(support) == len(issue.supporting_issue_indices)
+                 and any(item["path"] in issue.affected_paths and
+                         item["type"] in relevant_types.get(issue.category.value, {issue.category.value})
+                         for item in support))
+        if valid:
+            accepted.append(issue)
+        else:
+            rejected.append(issue)
+    return GlobalBatchReview(issues=accepted, summary=batch.summary), rejected
+
+
 def _root_key(issue: ReviewIssue) -> tuple[str, str]:
     explanation = issue.explanation
     if issue.issue_type.value == "link":

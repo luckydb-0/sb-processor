@@ -1,4 +1,4 @@
-from sb_processor.agent_b_batch import systematic_issue_groups, build_batch_request, validate_batch_review
+from sb_processor.agent_b_batch import systematic_issue_groups, build_batch_request, filter_unsupported_batch_issues, validate_batch_review
 from sb_processor.models import (Action, CheckStatus, GlobalBatchReview, GlobalReviewIssue, NoteChange,
                                  ProcessingProposal, ReviewCheck, ReviewIssue, ReviewedChange,
                                  ReviewResult, ReviewStatus)
@@ -44,3 +44,6 @@ def test_global_review_rejects_unknown_affected_path():
     import pytest
     with pytest.raises(ValueError, match="unknown"):
         validate_batch_review(batch, request)
+    filtered, rejected = filter_unsupported_batch_issues(batch, request)
+    assert filtered.issues == []
+    assert len(rejected) == 1

@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .agent_b_context import AgentBRequest, ReviewArtifacts, load_review_artifacts
-from .agent_b_batch import BatchReviewRequest, build_batch_request, systematic_issue_groups, validate_batch_review
+from .agent_b_batch import (BatchReviewRequest, build_batch_request, filter_unsupported_batch_issues,
+                            systematic_issue_groups, validate_batch_review)
 from .agent_b_evidence import bind_issue_references, constrain_corrections, evidence_supported_alias_relation
 from .agent_b_validators import validate_change
 from .review_checks import validate_check_coverage
@@ -248,9 +249,11 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
     result = ReviewResult(overall_status=_status([item.status for item in reviewed]),
                           issues=all_issues, reviewed_changes=reviewed)
     batch_request = build_batch_request(artifacts.proposal, result)
-    batch = GlobalBatchReview.model_validate(llm.review_batch(batch_request))
+    batch, rejected = filter_unsupported_batch_issues(
+        GlobalBatchReview.model_validate(llm.review_batch(batch_request)), batch_request)
     validate_batch_review(batch, batch_request)
     result.global_review = batch
+    result.rejected_global_issues = rejected
     by_path = {item.change_path: item for item in result.reviewed_changes}
     for issue in batch.issues:
         for path in issue.affected_paths:
@@ -296,6 +299,7 @@ def _stage_review(run: Path, proposal: dict[str, Any], requests: list[AgentBRequ
         "canonical_instruction_chars": canonical_chars,
         "instruction_reduction_percent": round(100 * (1 - len(requests[0].review_instructions) / canonical_chars), 1) if requests and canonical_chars else None,
         "batch_request_chars": len(batch_request.model_dump_json()),
+        "rejected_global_issue_count": len(result.rejected_global_issues),
         "request_chars_by_change": request_sizes,
         "total_request_chars": sum(request_sizes) + len(batch_request.model_dump_json()),
         "estimated_tokens": (sum(request_sizes) + len(batch_request.model_dump_json()) + 3) // 4,
