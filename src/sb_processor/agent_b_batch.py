@@ -72,8 +72,10 @@ def filter_unsupported_batch_issues(batch: GlobalBatchReview, request: BatchRevi
     accepted, rejected = [], []
     for issue in batch.issues:
         support = [by_index[index] for index in issue.supporting_issue_indices if index in by_index]
-        valid = (bool(issue.affected_paths) and set(issue.affected_paths) <= paths
+        valid = (len(set(issue.affected_paths)) >= 2 and set(issue.affected_paths) <= paths
                  and len(support) == len(issue.supporting_issue_indices)
+                 and len({item["path"] for item in support}) >= 2
+                 and all(item["path"] in issue.affected_paths for item in support)
                  and any(item["path"] in issue.affected_paths and
                          item["type"] in relevant_types.get(issue.category.value, {issue.category.value})
                          for item in support))

@@ -48,6 +48,10 @@ def constrain_corrections(request: AgentBRequest, response: ChangeReview) -> Non
     """Replace unsupported invented examples with an evidence-safe deletion proposal."""
     kept = []
     for issue in response.issues:
+        if (issue.issue_type.value == "source_fidelity" and
+                re.search(r"\b(?:closely follows the source|lack of originality)\b", issue.explanation, re.IGNORECASE) and
+                re.search(r"\b(?:unique insights|beyond what is provided|additional context)\b", issue.proposed_correction, re.IGNORECASE)):
+            continue
         if _unsupported_examples(issue.proposed_correction, request):
             if issue.issue_type.value == "source_specific_result" and re.search(
                     r"\b(?:does not provide examples|lacks examples)\b", issue.explanation, re.IGNORECASE):
@@ -66,7 +70,8 @@ def evidence_supported_alias_relation(request: AgentBRequest, response: ChangeRe
         pages = explicit_alias_pages(request, assessment.alias)
         if not pages or assessment.relation == AliasRelation.IDENTITY_EQUIVALENT:
             continue
-        contrary = any(ref.note_path or re.search(r"\b(?:subtype|variant|broader|narrower|implementation)\b", ref.reference, re.IGNORECASE)
+        contrary = any((ref.note_path and ref.note_path.endswith(".md")) or
+                       re.search(r"\b(?:subtype|variant|broader|narrower|implementation)\b", ref.reference, re.IGNORECASE)
                        for ref in assessment.evidence_refs)
         if contrary:
             continue

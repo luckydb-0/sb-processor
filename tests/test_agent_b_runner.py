@@ -7,8 +7,10 @@ from sb_processor.agent_b import review_staged_run
 from sb_processor.models import ReviewCheck, CheckStatus, GlobalBatchReview
 from sb_processor.review_checks import required_checks
 
-def _checks():
-    return [ReviewCheck(category=category, status=CheckStatus.PASS) for category in required_checks("concept")]
+def _checks(dot_status=CheckStatus.PASS):
+    return [ReviewCheck(category=category, status=dot_status if category.value == "dot_promotion" else CheckStatus.PASS,
+                        explanation="Independent identity unclear" if category.value == "dot_promotion" and dot_status != CheckStatus.PASS else None)
+            for category in required_checks("concept")]
 
 class _ReviewBatchMixin:
     def review_batch(self, request):
@@ -123,7 +125,7 @@ def test_invalid_alias_and_weak_dot_are_reported_separately(tmp_path: Path):
     class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             assert request.aliases_to_review == ["K-Fold A"]
-            return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[], alias_assessments=[AliasAssessment(
+            return ChangeReview(checks=_checks(CheckStatus.FAIL), status=ReviewStatus.PASS, issues=[], alias_assessments=[AliasAssessment(
                 alias="K-Fold A", status=ReviewStatus.REVIEW_REQUIRED, relation="SUBTYPE",
                 explanation="Subtype", proposed_correction="Remove alias")],
                 promotion_assessment=PromotionAssessment(status=ReviewStatus.REVIEW_REQUIRED,

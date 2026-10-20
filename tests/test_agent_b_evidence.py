@@ -36,8 +36,8 @@ def test_similarity_matching_does_not_gain_unsourced_distance_examples():
 
 def test_explicit_alias_evidence_accepts_profiling_and_regression():
     for title, alias, source in (
-        ("Profiling", "Behavior Description", "Profiling is also known as Behavior Description."),
-        ("Regression", "Value Estimation", "Value Estimation is also known as Regression."),
+        ("Profiling", "Behavior Description", "profiling\nalso known as behavior description"),
+        ("Regression", "Value Estimation", "regression (value estimation)"),
     ):
         request = _request(title, source, alias)
         review = _review(aliases=[AliasAssessment(alias=alias, relation="SUBTYPE", status=ReviewStatus.FIX,

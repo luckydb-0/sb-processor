@@ -155,9 +155,17 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                            if not (issue.issue_type == "link" and any(f"[[{target}]]" in issue.explanation
                                                                        for target in deterministic_links))
                            and not (issue.issue_type == "alias" and response.alias_assessments)
-                           and not (issue.issue_type == "dot_promotion" and response.promotion_assessment)]
+                           and not (issue.issue_type == "dot_promotion" and response.promotion_assessment)
+                           and not (issue.issue_type.value == "provenance" and any(d.issue_type.value == "provenance" for d in deterministic))
+                           and not (any(d.issue_type.value == "provenance" for d in deterministic)
+                                    and "PDF metadata" in issue.explanation)]
         issues = [*deterministic, *semantic_issues]
         status = response.status if semantic_issues else ReviewStatus.PASS
+        if status == ReviewStatus.REVIEW_REQUIRED and not any(
+                issue.issue_type.value in {"concept_boundary", "duplicate_concept", "dot_promotion", "evidence_gap", "existing_note"}
+                for issue in semantic_issues) and not any(
+                    check.status == CheckStatus.INSUFFICIENT_EVIDENCE for check in response.checks):
+            status = ReviewStatus.FIX if semantic_issues else ReviewStatus.PASS
         if any(check.status == CheckStatus.INSUFFICIENT_EVIDENCE for check in response.checks):
             status = ReviewStatus.REVIEW_REQUIRED
         assessments = {item.alias.casefold(): item for item in response.alias_assessments}
@@ -187,20 +195,17 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                                               else f"Remove alias '{alias}' from frontmatter"),
                                           evidence_refs=assessment.evidence_refs))
         if request.requires_promotion_assessment:
-            assessment = response.promotion_assessment
-            if assessment is None:
+            dot_check = next(check for check in response.checks if check.category == ReviewCategory.DOT_PROMOTION)
+            if dot_check.status in {CheckStatus.FAIL, CheckStatus.INSUFFICIENT_EVIDENCE}:
                 status = ReviewStatus.REVIEW_REQUIRED
-                issues.append(ReviewIssue(change_path=change.target_path, issue_type="evidence_gap",
-                                          severity=IssueSeverity.HIGH,
-                                          explanation="Agent B did not assess Dot promotion",
-                                          proposed_correction="Assess independent conceptual identity"))
-            elif assessment.status != ReviewStatus.PASS and not (assessment.substantive_content or assessment.foundational_identity):
-                status = _status([status, ReviewStatus.REVIEW_REQUIRED])
-                issues.append(ReviewIssue(change_path=change.target_path, issue_type="dot_promotion",
-                                          severity=IssueSeverity.MEDIUM, explanation=assessment.explanation,
-                                          proposed_correction=assessment.proposed_correction,
-                                          evidence_refs=assessment.evidence_refs,
-                                          source_pages=[page.page_number for page in request.source_evidence[:2]]))
+                if not any(issue.issue_type.value == "dot_promotion" for issue in issues):
+                    issues.append(ReviewIssue(change_path=change.target_path,
+                        issue_type="dot_promotion" if dot_check.status == CheckStatus.FAIL else "evidence_gap",
+                        severity=IssueSeverity.MEDIUM,
+                        explanation=dot_check.explanation or "Dot promotion requires an evidence-based decision",
+                        proposed_correction="Evaluate substantive content OR foundational reusable identity",
+                        evidence_refs=dot_check.evidence_refs,
+                        source_pages=[page.page_number for page in request.source_evidence[:2]]))
         if issues and status == ReviewStatus.PASS:
             status = ReviewStatus.FIX
         if deterministic and status == ReviewStatus.PASS:
