@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from .agent_b_context import AgentBRequest
-from .models import AliasRelation, ChangeReview, IssueSeverity, ReviewStatus, SourceReference
+from .models import AliasRelation, ChangeReview, IssueSeverity, IssueType, ReviewStatus, SourceReference
 from .registry import normalize
 
 
@@ -92,7 +92,7 @@ def bind_issue_references(request: AgentBRequest, response: ChangeReview) -> Non
             issue.evidence_refs = [SourceReference(note_path=request.proposal_change.target_path,
                                                     reference="Proposed note content and structure")]
             continue
-        issue.issue_type = "evidence_gap"
+        issue.issue_type = IssueType.EVIDENCE_GAP
         issue.severity = IssueSeverity.HIGH
         issue.explanation = "Agent B raised a semantic concern without citing supplied evidence: " + issue.explanation
         issue.proposed_correction = "Inspect the selected source and affected note before changing meaning"
