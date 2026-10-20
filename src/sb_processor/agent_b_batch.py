@@ -15,6 +15,7 @@ class BatchReviewRequest(StrictModel):
     source_summary: str
     changes: list[dict]
     individual_issues: list[dict]
+    systematic_patterns: list[dict] = Field(default_factory=list)
     equivalence: list[dict] = Field(default_factory=list)
     instructions: str
 
@@ -30,9 +31,15 @@ def build_batch_request(proposal: ProcessingProposal, result: ReviewResult) -> B
             "checks": {check.category.value: check.status.value for check in by_path[change.target_path].checks},
         } for change in proposal.note_changes],
         individual_issues=[{"index": index, "path": issue.change_path, "type": issue.issue_type.value,
-                            "explanation": issue.explanation[:300], "evidence_refs": [ref.model_dump(mode="json")
-                                for ref in issue.evidence_refs], "source_pages": issue.source_pages}
+                            "explanation": issue.explanation[:150],
+                            "source_pages": sorted(set(issue.source_pages + [ref.page for ref in issue.evidence_refs
+                                                                           if ref.page is not None])),
+                            "existing_note_refs": [ref.note_path for ref in issue.evidence_refs
+                                                   if ref.note_path and ref.note_path.endswith(".md")][:2]}
                            for index, issue in enumerate(result.issues)],
+        systematic_patterns=[{"type": item["issue_type"], "root": item["root"],
+                              "count": item["count"], "affected_paths": item["affected_paths"]}
+                             for item in systematic_issue_groups(result.issues)],
         equivalence=[{"candidate": item.candidate_name, "relation": item.relation.value,
                       "existing_path": item.existing_path} for item in proposal.concept_resolutions],
         instructions=("Inspect batch-level duplicate concepts, inconsistent naming/aliases/boundaries, "
