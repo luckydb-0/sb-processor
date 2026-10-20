@@ -351,6 +351,10 @@ def _stage_summary(run: Path, result: ReviewResult) -> None:
         lines.append(f"- **{group['root']}** — {group['count']} notes. {group['recommendation']}")
     if result.global_review:
         for issue in result.global_review.issues:
+            if issue.category.value == "provenance" and any(
+                    group["issue_type"] == "provenance" and set(issue.affected_paths) <= set(group["affected_paths"])
+                    for group in groups):
+                continue
             lines.append(f"- **{issue.category.value}** — {len(issue.affected_paths)} notes. {issue.explanation} {issue.recommendation}")
     lines += ["", "## Decisions required", ""]
     decision_types = {"alias", "dot_promotion", "concept_boundary", "duplicate_concept", "existing_note"}
@@ -360,7 +364,8 @@ def _stage_summary(run: Path, result: ReviewResult) -> None:
             continue
         local = [result.issues[index] for index in item.issue_indices
                  if result.issues[index].issue_type.value in decision_types]
-        global_items = [issue for issue in result.global_review.issues if item.change_path in issue.affected_paths] if result.global_review else []
+        global_items = [issue for issue in result.global_review.issues
+                        if issue.status == ReviewStatus.REVIEW_REQUIRED and item.change_path in issue.affected_paths] if result.global_review else []
         if not local and not global_items:
             continue
         any_decision = True

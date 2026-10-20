@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from pydantic import Field
 
-from .models import GlobalBatchReview, ProcessingProposal, ReviewIssue, ReviewResult, StrictModel
+from .models import GlobalBatchReview, ProcessingProposal, ReviewIssue, ReviewResult, ReviewStatus, StrictModel
 
 
 class BatchReviewRequest(StrictModel):
@@ -86,6 +86,12 @@ def filter_unsupported_batch_issues(batch: GlobalBatchReview, request: BatchRevi
                  and any(item["path"] in issue.affected_paths and
                          item["type"] in relevant_types.get(issue.category.value, {issue.category.value})
                          for item in support))
+        if issue.category.value in {"aliases", "dot_promotion", "duplicate_concept", "concept_boundaries"}:
+            relevant_paths = {item["path"] for item in support
+                              if item["type"] in relevant_types[issue.category.value]}
+            valid = valid and set(issue.affected_paths) <= relevant_paths
+        if issue.category.value == "duplicate_concept" and issue.status.value == "FIX":
+            issue.status = ReviewStatus.REVIEW_REQUIRED
         if valid:
             accepted.append(issue)
         else:
