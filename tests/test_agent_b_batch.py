@@ -47,3 +47,22 @@ def test_global_review_rejects_unknown_affected_path():
     filtered, rejected = filter_unsupported_batch_issues(batch, request)
     assert filtered.issues == []
     assert len(rejected) == 1
+
+
+def test_global_review_does_not_escalate_one_sided_broad_topic_overlap():
+    request = build_batch_request(ProcessingProposal(workflow="university", source="s.pdf", source_summary="",
+        vault_note_count=0, note_changes=[NoteChange(action=Action.CREATE, note_type="concept", title=title,
+            target_path=f"Dots/{title}.md", reason="test", content="# A", sources=[], candidate_existing_notes=[],
+            original_content_hash=None) for title in ("Machine Learning", "Unsupervised Learning")], review_required=[]),
+        ReviewResult(overall_status=ReviewStatus.REVIEW_REQUIRED,
+            issues=[ReviewIssue(change_path="Dots/Unsupervised Learning.md", issue_type="duplicate_concept",
+                severity="medium", explanation="May overlap with Machine Learning", proposed_correction="Review")],
+            reviewed_changes=[ReviewedChange(change_path=f"Dots/{title}.md", status=ReviewStatus.REVIEW_REQUIRED,
+                checks=[ReviewCheck(category=item, status=CheckStatus.PASS) for item in required_checks("concept")])
+                for title in ("Machine Learning", "Unsupervised Learning")]))
+    batch = GlobalBatchReview(issues=[GlobalReviewIssue(category="duplicate_concept", status="REVIEW_REQUIRED",
+        affected_paths=["Dots/Machine Learning.md", "Dots/Unsupervised Learning.md"],
+        explanation="The broader concept includes this subtopic", recommendation="Clarify", supporting_issue_indices=[0])],
+        summary="")
+    accepted, rejected = filter_unsupported_batch_issues(batch, request)
+    assert not accepted.issues and len(rejected) == 1

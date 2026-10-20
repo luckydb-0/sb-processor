@@ -6,7 +6,7 @@ import re
 
 import yaml
 
-from .models import Action, IssueSeverity, NoteChange, NoteMetadata, ReviewIssue
+from .models import Action, IssueSeverity, NoteChange, NoteMetadata, ReviewIssue, SourceReference
 from .registry import normalize
 from .staging import audit_wikilinks
 
@@ -28,7 +28,9 @@ _PDF_METADATA = re.compile(r"(?im)^\s*(?:\*\*)?(?:Source|Source file|Location):(
 def _issue(change: NoteChange, kind: str, explanation: str, correction: str,
            severity: IssueSeverity = IssueSeverity.MEDIUM) -> ReviewIssue:
     return ReviewIssue(change_path=change.target_path, issue_type=kind, severity=severity,
-                       explanation=explanation, proposed_correction=correction)
+                       explanation=explanation, proposed_correction=correction,
+                       evidence_refs=[SourceReference(note_path=change.target_path,
+                                                      reference="Proposed note content or target path")])
 
 
 def validate_change(change: NoteChange, existing: list[NoteMetadata],

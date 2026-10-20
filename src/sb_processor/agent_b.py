@@ -334,10 +334,17 @@ def _stage_summary(run: Path, result: ReviewResult) -> None:
     counts = {status: sum(item.status == status for item in result.reviewed_changes) for status in ReviewStatus}
     groups = systematic_issue_groups(result.issues)
     lines = ["# Review Summary", "", f"Agent A proposed: {len(result.reviewed_changes)} changes", "",
-             f"## Ready — {counts[ReviewStatus.PASS]}", "",
-             f"## Auto-fixable — {counts[ReviewStatus.FIX]}", "",
-             f"## Needs your decision — {counts[ReviewStatus.REVIEW_REQUIRED]}", "",
-             "## Systematic issues", ""]
+             f"## Ready — {counts[ReviewStatus.PASS]}", ""]
+    lines.extend(f"- {item.change_path.rsplit('/', 1)[-1].removesuffix('.md')}" for item in result.reviewed_changes
+                 if item.status == ReviewStatus.PASS)
+    if not counts[ReviewStatus.PASS]:
+        lines.append("None.")
+    lines += ["", f"## Auto-fixable — {counts[ReviewStatus.FIX]}", ""]
+    lines.extend(f"- {item.change_path.rsplit('/', 1)[-1].removesuffix('.md')}" for item in result.reviewed_changes
+                 if item.status == ReviewStatus.FIX)
+    lines += ["", f"## Needs review — {counts[ReviewStatus.REVIEW_REQUIRED]}", "",
+              "Some items need a conceptual decision; others need better reviewer evidence.", "",
+              "## Systematic issues", ""]
     if not groups and not (result.global_review and result.global_review.issues):
         lines.append("None identified.")
     for group in groups:
@@ -346,19 +353,34 @@ def _stage_summary(run: Path, result: ReviewResult) -> None:
         for issue in result.global_review.issues:
             lines.append(f"- **{issue.category.value}** — {len(issue.affected_paths)} notes. {issue.explanation} {issue.recommendation}")
     lines += ["", "## Decisions required", ""]
-    if not counts[ReviewStatus.REVIEW_REQUIRED]:
-        lines.append("None.")
+    decision_types = {"alias", "dot_promotion", "concept_boundary", "duplicate_concept", "existing_note"}
+    any_decision = False
     for item in result.reviewed_changes:
         if item.status != ReviewStatus.REVIEW_REQUIRED:
             continue
-        local = [result.issues[index] for index in item.issue_indices]
+        local = [result.issues[index] for index in item.issue_indices
+                 if result.issues[index].issue_type.value in decision_types]
         global_items = [issue for issue in result.global_review.issues if item.change_path in issue.affected_paths] if result.global_review else []
+        if not local and not global_items:
+            continue
+        any_decision = True
         lines += [f"### {item.change_path.rsplit('/', 1)[-1].removesuffix('.md')}", "",
                   f"Agent A target: `{item.change_path}`", ""]
-        for issue in local[:2]:
+        for issue in local[:3]:
             lines += [f"- Agent B: {issue.explanation}", f"  Suggested next step: {issue.proposed_correction}"]
         for issue in global_items[:1]:
             lines += [f"- Batch: {issue.explanation}", f"  Suggested next step: {issue.recommendation}"]
+        lines.append("")
+    if not any_decision:
+        lines += ["None.", ""]
+    gaps = [(item, result.issues[index]) for item in result.reviewed_changes for index in item.issue_indices
+            if result.issues[index].issue_type.value == "evidence_gap"]
+    if gaps:
+        lines += ["## Review evidence gaps", "", "These need a reviewer rerun or source check before approval:", ""]
+        by_path: dict[str, int] = {}
+        for item, _ in gaps:
+            by_path[item.change_path] = by_path.get(item.change_path, 0) + 1
+        lines.extend(f"- `{path}` — {count} uncited or missing assessments" for path, count in by_path.items())
         lines.append("")
     lines += ["## Review files", "", "- `agent_b/detailed_report.md` — all per-note findings and the global review",
               "- `agent_b/review.json` — structured checks and issues",
