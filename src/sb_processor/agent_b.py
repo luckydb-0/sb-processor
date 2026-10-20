@@ -138,6 +138,10 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         for issue in response.issues:
             if not issue.evidence_refs and not issue.source_pages:
                 raise ValueError(f"Agent B semantic issue lacks evidence reference: {change.target_path}: {issue.issue_type.value}")
+            cited_pages = set(issue.source_pages) | {ref.page for ref in issue.evidence_refs if ref.page is not None}
+            supplied_pages = {page.page_number for page in request.source_evidence}
+            if cited_pages - supplied_pages:
+                raise ValueError(f"Agent B cited an unsupplied source page: {change.target_path}: {sorted(cited_pages - supplied_pages)}")
         deterministic_links = {issue.explanation.split("[[", 1)[1].split("]]", 1)[0]
                                for issue in deterministic if issue.issue_type == "link" and "[[" in issue.explanation}
         semantic_issues = [issue for issue in response.issues
@@ -164,12 +168,17 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                                 else ReviewStatus.FIX)
                 if alias_status == ReviewStatus.PASS:
                     continue
+                if not assessment.evidence_refs:
+                    alias_status = ReviewStatus.REVIEW_REQUIRED
                 status = _status([status, alias_status])
                 issues.append(ReviewIssue(change_path=change.target_path, issue_type="alias",
-                                          severity=IssueSeverity.MEDIUM, explanation=f"{alias}: {assessment.explanation}",
+                                          severity=IssueSeverity.MEDIUM,
+                                          explanation=f"{alias}: {assessment.explanation}" +
+                                              (" (relation lacks cited evidence)" if not assessment.evidence_refs else ""),
                                           proposed_correction=(assessment.proposed_correction
                                               if alias_status == ReviewStatus.REVIEW_REQUIRED
-                                              else f"Remove alias '{alias}' from frontmatter")))
+                                              else f"Remove alias '{alias}' from frontmatter"),
+                                          evidence_refs=assessment.evidence_refs))
         if request.requires_promotion_assessment:
             assessment = response.promotion_assessment
             if assessment is None:
@@ -182,7 +191,9 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                 status = _status([status, ReviewStatus.REVIEW_REQUIRED])
                 issues.append(ReviewIssue(change_path=change.target_path, issue_type="dot_promotion",
                                           severity=IssueSeverity.MEDIUM, explanation=assessment.explanation,
-                                          proposed_correction=assessment.proposed_correction))
+                                          proposed_correction=assessment.proposed_correction,
+                                          evidence_refs=assessment.evidence_refs,
+                                          source_pages=[page.page_number for page in request.source_evidence[:2]]))
         if issues and status == ReviewStatus.PASS:
             status = ReviewStatus.FIX
         if deterministic and status == ReviewStatus.PASS:

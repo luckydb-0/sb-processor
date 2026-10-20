@@ -20,9 +20,13 @@ def explicit_alias_pages(request: AgentBRequest, alias: str) -> list[int]:
     name = normalize(alias)
     pages = []
     for page in request.source_evidence:
-        for line in page.text.splitlines():
-            normalized = normalize(line)
-            if title in normalized and name in normalized and _ALSO_KNOWN_AS.search(line):
+        lines = page.text.splitlines()
+        for index, line in enumerate(lines):
+            window = " ".join(lines[index:index + 2])
+            normalized = normalize(window)
+            raw_pair = (re.search(re.escape(request.proposal_change.title) + r"\s*\(\s*" + re.escape(alias) + r"\s*\)", window, re.IGNORECASE)
+                        or re.search(re.escape(alias) + r"\s*\(\s*" + re.escape(request.proposal_change.title) + r"\s*\)", window, re.IGNORECASE))
+            if title in normalized and name in normalized and (_ALSO_KNOWN_AS.search(window) or raw_pair):
                 pages.append(page.page_number)
                 break
     return pages
