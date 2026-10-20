@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from .agent_b_context import AgentBRequest
-from .models import AliasRelation, ChangeReview, ReviewStatus
+from .models import AliasRelation, ChangeReview, IssueSeverity, ReviewStatus, SourceReference
 from .registry import normalize
 
 
@@ -74,3 +74,29 @@ def evidence_supported_alias_relation(request: AgentBRequest, response: ChangeRe
         assessment.status = ReviewStatus.PASS
         assessment.explanation = f"Supplied page {pages[0]} explicitly presents this as another name; no contrary evidence cited"
         assessment.proposed_correction = ""
+
+
+def bind_issue_references(request: AgentBRequest, response: ChangeReview) -> None:
+    """Bind directly visible structural issues; reject unsupported semantic assertions as gaps."""
+    pages = {page.page_number for page in request.source_evidence}
+    structural = {"link", "metadata", "workflow_contamination", "naming", "template", "provenance",
+                  "source_independent_wording"}
+    for issue in response.issues:
+        cited = set(issue.source_pages) | {ref.page for ref in issue.evidence_refs if ref.page is not None}
+        if cited - pages:
+            issue.source_pages = [page for page in issue.source_pages if page in pages]
+            issue.evidence_refs = [ref for ref in issue.evidence_refs if ref.page is None or ref.page in pages]
+        if issue.source_pages or issue.evidence_refs:
+            continue
+        if issue.issue_type.value in structural:
+            issue.evidence_refs = [SourceReference(note_path=request.proposal_change.target_path,
+                                                    reference="Proposed note content and structure")]
+            continue
+        issue.issue_type = "evidence_gap"
+        issue.severity = IssueSeverity.HIGH
+        issue.explanation = "Agent B raised a semantic concern without citing supplied evidence: " + issue.explanation
+        issue.proposed_correction = "Inspect the selected source and affected note before changing meaning"
+        issue.corrected_content = None
+        issue.evidence_refs = [SourceReference(note_path=request.proposal_change.target_path,
+                                               reference="Uncited Agent B concern; no factual distinction accepted")]
+        response.status = ReviewStatus.REVIEW_REQUIRED

@@ -1,5 +1,5 @@
 from sb_processor.agent_b_context import AgentBRequest, SourcePageEvidence
-from sb_processor.agent_b_evidence import constrain_corrections, evidence_supported_alias_relation
+from sb_processor.agent_b_evidence import bind_issue_references, constrain_corrections, evidence_supported_alias_relation
 from sb_processor.models import (Action, AliasAssessment, ChangeReview, NoteChange, PromotionAssessment,
                                  ReviewCheck, CheckStatus, ReviewIssue, ReviewStatus)
 from sb_processor.review_checks import required_checks
@@ -62,3 +62,21 @@ def test_foundational_dot_promotion_is_not_based_on_length_alone():
                                          proposed_correction="", substantive_content=False,
                                          foundational_identity=True)
         assert assessment.foundational_identity and assessment.status == ReviewStatus.PASS
+
+
+def test_uncited_structural_issue_refs_the_proposed_note():
+    request = _request("A", "A is supported")
+    review = _review([ReviewIssue(change_path="Dots/A.md", issue_type="link", severity="medium",
+                                  explanation="Link is excessive", proposed_correction="Remove it")])
+    bind_issue_references(request, review)
+    assert review.issues[0].evidence_refs[0].note_path == "Dots/A.md"
+
+
+def test_uncited_semantic_assertion_becomes_evidence_gap():
+    request = _request("A", "A is supported")
+    review = _review([ReviewIssue(change_path="Dots/A.md", issue_type="concept_boundary", severity="medium",
+                                  explanation="B is a subtype", proposed_correction="Split B")])
+    bind_issue_references(request, review)
+    assert review.issues[0].issue_type.value == "evidence_gap"
+    assert review.status == ReviewStatus.REVIEW_REQUIRED
+    assert "Split B" not in review.model_dump_json()

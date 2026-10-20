@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from .agent_b_context import AgentBRequest, ReviewArtifacts, load_review_artifacts
 from .agent_b_batch import BatchReviewRequest, build_batch_request, systematic_issue_groups, validate_batch_review
-from .agent_b_evidence import constrain_corrections, evidence_supported_alias_relation
+from .agent_b_evidence import bind_issue_references, constrain_corrections, evidence_supported_alias_relation
 from .agent_b_validators import validate_change
 from .review_checks import validate_check_coverage
 from .models import (Action, AliasRelation, ChangeReview, GlobalBatchReview, IssueSeverity, ReviewIssue, ReviewedChange,
@@ -133,6 +133,7 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         validate_check_coverage(response.checks, change.note_type)
         constrain_corrections(request, response)
         evidence_supported_alias_relation(request, response)
+        bind_issue_references(request, response)
         if any(issue.change_path != change.target_path for issue in response.issues):
             raise ValueError(f"Agent B returned an issue for a different change: {change.target_path}")
         for issue in response.issues:
