@@ -48,7 +48,7 @@ def test_ordinary_create_verb_is_not_workflow_contamination():
 def test_lecture_required_metadata_when_source_is_known():
     item = change("---\ntype: lecture\n---\n# A", note_type="lecture")
     issues = validate_change(item, [], [], source_metadata={"filename": "s.pdf", "path": "/s.pdf"})
-    assert sum(issue.issue_type == "metadata" for issue in issues) == 3
+    assert sum(issue.issue_type == "metadata" for issue in issues) == 7
 
 
 def test_concept_direct_pdf_provenance_is_objective_fix():
@@ -76,3 +76,9 @@ def test_map_filename_collision_is_flagged_without_compatibility_mapping():
 def test_concept_disallows_lecture_only_frontmatter():
     issues = validate_change(change("---\ntype: concept\nlecture: 01\ncourse: ML\n---\n# A"), [], [])
     assert any(issue.issue_type == "metadata" and "lecture" in issue.explanation for issue in issues)
+
+
+def test_map_disallows_source_specific_frontmatter():
+    item = change("---\ntype: map\nsource_file: s.pdf\nlocation: /s.pdf\n---\n# A", "map")
+    issues = validate_change(item, [], [])
+    assert sum(issue.issue_type == "metadata" for issue in issues) == 2

@@ -65,7 +65,17 @@ def validate_change(change: NoteChange, existing: list[NoteMetadata],
                     if key in metadata:
                         issues.append(_issue(change, "metadata", f"Concept frontmatter contains lecture-only field: {key}",
                                              f"Remove {key} from Concept frontmatter; keep source context in the Lecture Note"))
+            if change.note_type == "map":
+                for key in ("lecture", "source_file", "location"):
+                    if key in metadata:
+                        issues.append(_issue(change, "metadata", f"Map frontmatter contains source-specific field: {key}",
+                                             f"Remove {key} from Map frontmatter"))
             if change.note_type == "lecture":
+                if source_metadata:
+                    for key in ("course", "institution", "professor", "year"):
+                        if key not in metadata:
+                            issues.append(_issue(change, "metadata", f"Lecture frontmatter missing {key} field",
+                                                 f"Add {key} as a value or blank when unknown"))
                 lecture = metadata.get("lecture")
                 if not isinstance(lecture, str) or not re.fullmatch(r"\d+[a-zA-Z]?", lecture):
                     issues.append(_issue(change, "metadata", "Lecture identifier contains a title or invalid format",
