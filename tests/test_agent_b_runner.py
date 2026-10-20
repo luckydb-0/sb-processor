@@ -233,3 +233,38 @@ def test_orthographic_alias_does_not_require_invented_distinction(tmp_path: Path
     assert result.reviewed_changes[0].status == ReviewStatus.PASS
     assert not any(issue.issue_type.value == "alias" for issue in result.issues)
     assert next(check for check in result.reviewed_changes[0].checks if check.category.value == "aliases").status == CheckStatus.PASS
+
+
+def test_failed_check_without_issue_blocks_ready_status(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "source_fidelity").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.PASS, issues=[],
+                promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
+                    explanation="Independent", proposed_correction=""))
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.REVIEW_REQUIRED
+    assert any(issue.issue_type.value == "evidence_gap" and "source_fidelity" in issue.explanation
+               for issue in result.issues)
+
+
+def test_distinct_semantic_provenance_issue_survives_pdf_metadata_fix(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
+    proposal.note_changes[0].content = "---\ntype: concept\nsource_file: source.pdf\n---\n# A\nA is supported."
+    (run / "proposal.json").write_text(proposal.model_dump_json())
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            return ChangeReview(checks=_checks(), status=ReviewStatus.FIX, issues=[ReviewIssue(
+                change_path=request.proposal_change.target_path, issue_type="provenance", severity="medium",
+                explanation="Wrong Lecture wikilink in provenance", proposed_correction="Correct the Lecture link",
+                source_pages=[1])], promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
+                    explanation="Independent", proposed_correction=""))
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert any("Wrong Lecture wikilink" in issue.explanation for issue in result.issues)

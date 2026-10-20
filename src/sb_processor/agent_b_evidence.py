@@ -34,8 +34,7 @@ def explicit_alias_pages(request: AgentBRequest, alias: str) -> list[int]:
 
 
 def _unsupported_examples(correction: str, request: AgentBRequest) -> bool:
-    evidence = normalize(" ".join([request.proposal_change.content,
-        *(page.text + " " + page.visual_extraction for page in request.source_evidence),
+    evidence = normalize(" ".join([*(page.text + " " + page.visual_extraction for page in request.source_evidence),
         *(note.body for note in request.affected_existing_notes)]))
     terms = set(evidence.split())
     for match in _EXAMPLE.finditer(correction):
@@ -53,7 +52,8 @@ def constrain_corrections(request: AgentBRequest, response: ChangeReview) -> Non
                 re.search(r"\b(?:closely follows the source|lack of originality)\b", issue.explanation, re.IGNORECASE) and
                 re.search(r"\b(?:unique insights|beyond what is provided|additional context)\b", issue.proposed_correction, re.IGNORECASE)):
             continue
-        if _unsupported_examples(issue.proposed_correction, request):
+        if _unsupported_examples(issue.proposed_correction, request) or (
+                issue.corrected_content is not None and _unsupported_examples(issue.corrected_content, request)):
             if issue.issue_type.value == "source_specific_result" and re.search(
                     r"\b(?:does not provide examples|lacks examples)\b", issue.explanation, re.IGNORECASE):
                 continue

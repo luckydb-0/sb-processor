@@ -35,6 +35,18 @@ def test_similarity_matching_does_not_gain_unsourced_distance_examples():
     assert "cosine" not in review.model_dump_json()
 
 
+def test_invented_example_in_agent_a_proposal_does_not_authorize_correction():
+    request = _request("Similarity Matching", "Similarity matching requires suitable similarity measures.")
+    request.proposal_change.content += " For example, Euclidean distance."
+    review = _review([ReviewIssue(change_path="Dots/Similarity Matching.md", issue_type="source_fidelity",
+        severity="medium", explanation="Example unsupported", source_pages=[35],
+        proposed_correction="Add examples such as Euclidean distance.",
+        corrected_content="For example, Euclidean distance.")])
+    constrain_corrections(request, review)
+    assert review.issues[0].corrected_content is None
+    assert "Euclidean" not in review.issues[0].proposed_correction
+
+
 def test_explicit_alias_evidence_accepts_profiling_and_regression():
     for title, alias, source in (
         ("Profiling", "Behavior Description", "profiling\nalso known as behavior description"),

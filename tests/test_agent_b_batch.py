@@ -1,5 +1,6 @@
 from sb_processor.agent_b_batch import (systematic_issue_groups, objective_batch_patterns,
-                                         build_batch_request, filter_unsupported_batch_issues, validate_batch_review)
+                                         build_batch_request, filter_unsupported_batch_issues, validate_batch_review,
+                                         BatchReviewRequest)
 from sb_processor.models import (Action, CheckStatus, GlobalBatchReview, GlobalReviewIssue, NoteChange,
                                  ProcessingProposal, ReviewCheck, ReviewIssue, ReviewedChange,
                                  ReviewResult, ReviewStatus)
@@ -90,3 +91,35 @@ def test_global_semantic_group_needs_support_for_every_affected_note():
         summary="")
     accepted, rejected = filter_unsupported_batch_issues(batch, request)
     assert not accepted.issues and len(rejected) == 1
+
+
+def test_global_provenance_group_needs_provenance_on_every_affected_note():
+    request = build_batch_request(ProcessingProposal(workflow="university", source="s.pdf", source_summary="",
+        vault_note_count=0, note_changes=[NoteChange(action=Action.CREATE, note_type="concept", title=title,
+            target_path=f"Dots/{title}.md", reason="test", content="# A", sources=[], candidate_existing_notes=[],
+            original_content_hash=None) for title in ("A", "B")], review_required=[]),
+        ReviewResult(overall_status=ReviewStatus.FIX,
+            issues=[ReviewIssue(change_path="Dots/A.md", issue_type="provenance", severity="medium",
+                explanation="Direct PDF metadata", proposed_correction="Remove"),
+                ReviewIssue(change_path="Dots/B.md", issue_type="link", severity="medium",
+                explanation="Broken link", proposed_correction="Repair")],
+            reviewed_changes=[ReviewedChange(change_path=f"Dots/{title}.md", status=ReviewStatus.FIX,
+                checks=[ReviewCheck(category=item, status=CheckStatus.PASS) for item in required_checks("concept")])
+                for title in ("A", "B")]))
+    batch = GlobalBatchReview(issues=[GlobalReviewIssue(category="provenance", status="FIX",
+        affected_paths=["Dots/A.md", "Dots/B.md"], explanation="Both direct PDF metadata",
+        recommendation="Remove", supporting_issue_indices=[0, 1])], summary="")
+    accepted, rejected = filter_unsupported_batch_issues(batch, request)
+    assert not accepted.issues and len(rejected) == 1
+
+
+def test_global_map_structure_group_accepts_matching_per_note_issues():
+    paths = ["Maps/A - Map.md", "Maps/B - Map.md"]
+    request = BatchReviewRequest(workflow="university", source_summary="", changes=[{"path": path} for path in paths],
+        individual_issues=[{"index": index, "path": path, "type": "map"} for index, path in enumerate(paths)],
+        instructions="")
+    batch = GlobalBatchReview(issues=[GlobalReviewIssue(category="map_structure", status="REVIEW_REQUIRED",
+        affected_paths=paths, explanation="Map responsibilities unclear", recommendation="Review",
+        supporting_issue_indices=[0, 1])], summary="")
+    accepted, rejected = filter_unsupported_batch_issues(batch, request)
+    assert len(accepted.issues) == 1 and not rejected

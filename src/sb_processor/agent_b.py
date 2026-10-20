@@ -15,7 +15,7 @@ from .agent_b_evidence import (bind_issue_references, constrain_corrections,
 from .agent_b_validators import validate_change
 from .review_checks import validate_check_coverage
 from .models import (Action, AliasRelation, ChangeReview, GlobalBatchReview, IssueSeverity, ReviewIssue, ReviewedChange,
-                     ReviewResult, ReviewStatus, NoteChange, CheckStatus, ReviewCategory, ReviewCheck)
+                     ReviewResult, ReviewStatus, NoteChange, CheckStatus, ReviewCategory, ReviewCheck, SourceReference)
 from .vault import scan_vault
 from .registry import normalize
 from .workflows.university_review import UniversityReviewAdapter
@@ -159,9 +159,9 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                                                                        for target in deterministic_links))
                            and not (issue.issue_type == "alias" and response.alias_assessments)
                            and not (issue.issue_type == "dot_promotion" and response.promotion_assessment)
-                           and not (issue.issue_type.value == "provenance" and any(d.issue_type.value == "provenance" for d in deterministic))
-                           and not (any(d.issue_type.value == "provenance" for d in deterministic)
-                                    and "PDF metadata" in issue.explanation)]
+                           and not (issue.issue_type.value == "provenance" and "PDF metadata" in issue.explanation
+                                    and any(d.issue_type.value == "provenance" and "PDF metadata" in d.explanation
+                                            for d in deterministic))]
         issues = [*deterministic, *semantic_issues]
         status = response.status if semantic_issues else ReviewStatus.PASS
         if status == ReviewStatus.REVIEW_REQUIRED and not any(
@@ -236,8 +236,6 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
             issues.append(ReviewIssue(change_path=change.target_path, issue_type="evidence_gap",
                                       severity=IssueSeverity.HIGH, explanation="No source page evidence selected",
                                       proposed_correction="Supply source provenance for this change"))
-        start = len(all_issues)
-        all_issues.extend(issues)
         checks = [check.model_copy(deep=True) for check in response.checks]
         deterministic_categories = {
             "metadata": ReviewCategory.METADATA,
@@ -257,6 +255,34 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                     issue.issue_type.value == "alias" for issue in issues):
                 check.status = CheckStatus.PASS
                 check.explanation = "Proposed aliases have direct identity or orthographic evidence"
+        issue_categories = {
+            "source_independent_wording": ReviewCategory.SOURCE_INDEPENDENCE,
+            "source_specific_result": ReviewCategory.SOURCE_SPECIFIC_RESULTS,
+            "existing_note": ReviewCategory.EXISTING_NOTE_INTEGRITY,
+            "concept_boundary": ReviewCategory.CONCEPT_BOUNDARIES,
+            "duplicate_concept": ReviewCategory.DUPLICATE_CONCEPT,
+            "dot_promotion": ReviewCategory.DOT_PROMOTION,
+            "alias": ReviewCategory.ALIASES,
+            "link": ReviewCategory.LINKS,
+            "map": ReviewCategory.MAP_STRUCTURE,
+            "course": ReviewCategory.COURSE_STRUCTURE,
+            "lecture": ReviewCategory.LECTURE_STRUCTURE,
+            "verbosity": ReviewCategory.SYNTHESIS,
+        }
+        covered = {issue_categories.get(issue.issue_type.value, issue.issue_type.value) for issue in issues}
+        orphan_failures = [check for check in checks if check.status == CheckStatus.FAIL
+                           and check.category not in covered and check.category.value not in covered]
+        if orphan_failures:
+            status = ReviewStatus.REVIEW_REQUIRED
+            categories = ", ".join(check.category.value for check in orphan_failures)
+            issues.append(ReviewIssue(change_path=change.target_path, issue_type="evidence_gap",
+                severity=IssueSeverity.HIGH,
+                explanation=f"Agent B failed mandatory checks without actionable findings: {categories}",
+                proposed_correction="Rerun these checks with cited evidence before approving",
+                evidence_refs=[SourceReference(note_path=change.target_path,
+                    reference="Unresolved Agent B checklist failures")]))
+        start = len(all_issues)
+        all_issues.extend(issues)
         reviewed.append(ReviewedChange(change_path=change.target_path, status=status,
                                        checks=checks,
                                        issue_indices=list(range(start, len(all_issues)))))

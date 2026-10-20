@@ -75,6 +75,9 @@ def filter_unsupported_batch_issues(batch: GlobalBatchReview, request: BatchRevi
         "dot_promotion": {"dot_promotion"},
         "links": {"link"},
         "naming": {"naming"},
+        "map_structure": {"map"},
+        "course_structure": {"course"},
+        "lecture_structure": {"lecture"},
         "cumulative_integrity": {"cumulative_integrity", "existing_note", "duplicate_concept"},
     }
     accepted, rejected = [], []
@@ -87,10 +90,9 @@ def filter_unsupported_batch_issues(batch: GlobalBatchReview, request: BatchRevi
                  and any(item["path"] in issue.affected_paths and
                          item["type"] in relevant_types.get(issue.category.value, {issue.category.value})
                          for item in support))
-        if issue.category.value not in {"provenance", "links", "workflow_contamination", "naming"}:
-            relevant_paths = {item["path"] for item in support
-                              if item["type"] in relevant_types.get(issue.category.value, {issue.category.value})}
-            valid = valid and set(issue.affected_paths) <= relevant_paths
+        relevant_paths = {item["path"] for item in support
+                          if item["type"] in relevant_types.get(issue.category.value, {issue.category.value})}
+        valid = valid and set(issue.affected_paths) <= relevant_paths
         if issue.category.value == "duplicate_concept" and issue.status.value == "FIX":
             issue.status = ReviewStatus.REVIEW_REQUIRED
         if valid:
