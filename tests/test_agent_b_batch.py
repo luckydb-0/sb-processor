@@ -1,4 +1,5 @@
-from sb_processor.agent_b_batch import systematic_issue_groups, build_batch_request, filter_unsupported_batch_issues, validate_batch_review
+from sb_processor.agent_b_batch import (systematic_issue_groups, objective_batch_patterns,
+                                         build_batch_request, filter_unsupported_batch_issues, validate_batch_review)
 from sb_processor.models import (Action, CheckStatus, GlobalBatchReview, GlobalReviewIssue, NoteChange,
                                  ProcessingProposal, ReviewCheck, ReviewIssue, ReviewedChange,
                                  ReviewResult, ReviewStatus)
@@ -13,6 +14,10 @@ def test_identical_ghost_links_group_into_one_human_issue():
     assert len(groups) == 1
     assert groups[0]["count"] == 14
     assert groups[0]["root"] == "machine learning - map"
+    patterns = objective_batch_patterns(issues)
+    assert len(patterns) == 1
+    assert patterns[0].category.value == "links"
+    assert len(patterns[0].supporting_issue_indices) == 14
 
 
 def test_batch_request_contains_summaries_without_source_pages():

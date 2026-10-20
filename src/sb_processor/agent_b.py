@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from .agent_b_context import AgentBRequest, ReviewArtifacts, load_review_artifacts
 from .agent_b_batch import (BatchReviewRequest, build_batch_request, filter_unsupported_batch_issues,
-                            systematic_issue_groups, validate_batch_review)
+                            objective_batch_patterns, systematic_issue_groups, validate_batch_review)
 from .agent_b_evidence import (bind_issue_references, constrain_corrections,
                                 evidence_supported_alias_relation, explicit_alias_pages, normalize_promotion_check)
 from .agent_b_validators import validate_change
@@ -267,6 +267,12 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
     batch, rejected = filter_unsupported_batch_issues(
         GlobalBatchReview.model_validate(llm.review_batch(batch_request)), batch_request)
     validate_batch_review(batch, batch_request)
+    objective = objective_batch_patterns(result.issues)
+    batch.issues = [*objective, *[issue for issue in batch.issues if not any(
+        issue.category == pattern.category and set(issue.affected_paths) <= set(pattern.affected_paths)
+        for pattern in objective)]]
+    batch.summary = (f"{len(batch.issues)} supported cross-note patterns; "
+                     f"{len(rejected)} unsupported model suggestions retained in diagnostics.")
     result.global_review = batch
     result.rejected_global_issues = rejected
     by_path = {item.change_path: item for item in result.reviewed_changes}
@@ -361,8 +367,9 @@ def _stage_summary(run: Path, result: ReviewResult) -> None:
         lines.append(f"- **{group['root']}** — {group['count']} notes. {group['recommendation']}")
     if result.global_review:
         for issue in result.global_review.issues:
-            if issue.category.value == "provenance" and any(
-                    group["issue_type"] == "provenance" and set(issue.affected_paths) <= set(group["affected_paths"])
+            if any(
+                    issue.category.value == ("links" if group["issue_type"] == "link" else group["issue_type"])
+                    and set(issue.affected_paths) <= set(group["affected_paths"])
                     for group in groups):
                 continue
             lines.append(f"- **{issue.category.value}** — {len(issue.affected_paths)} notes. {issue.explanation} {issue.recommendation}")

@@ -7,7 +7,8 @@ from collections import defaultdict
 
 from pydantic import Field
 
-from .models import GlobalBatchReview, ProcessingProposal, ReviewIssue, ReviewResult, ReviewStatus, StrictModel
+from .models import (GlobalBatchReview, GlobalReviewIssue, ProcessingProposal, ReviewCategory,
+                     ReviewIssue, ReviewResult, ReviewStatus, StrictModel)
 
 
 class BatchReviewRequest(StrictModel):
@@ -125,3 +126,18 @@ def systematic_issue_groups(issues: list[ReviewIssue]) -> list[dict]:
                        "count": len(paths), "issue_indices": [index for index, _ in members],
                        "recommendation": members[0][1].proposed_correction})
     return sorted(output, key=lambda item: (-item["count"], item["root"]))
+
+
+def objective_batch_patterns(issues: list[ReviewIssue]) -> list[GlobalReviewIssue]:
+    """Aggregate repeated objective findings, retaining every affected path and issue index."""
+    categories = {"provenance": ReviewCategory.PROVENANCE, "link": ReviewCategory.LINKS,
+                  "naming": ReviewCategory.NAMING, "workflow_contamination": ReviewCategory.WORKFLOW_CONTAMINATION}
+    patterns = []
+    for group in systematic_issue_groups(issues):
+        if group["issue_type"] not in categories:
+            continue
+        patterns.append(GlobalReviewIssue(category=categories[group["issue_type"]], status=ReviewStatus.FIX,
+            affected_paths=group["affected_paths"],
+            explanation=f"{group['root']} occurs in {group['count']} proposed notes",
+            recommendation=group["recommendation"], supporting_issue_indices=group["issue_indices"]))
+    return patterns
