@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 
 from .agent_b_context import AgentBRequest
-from .models import AliasRelation, ChangeReview, IssueSeverity, IssueType, ReviewStatus, SourceReference
+from .models import (AliasRelation, ChangeReview, CheckStatus, IssueSeverity, IssueType,
+                     ReviewCategory, ReviewStatus, SourceReference)
 from .registry import normalize
 
 
@@ -79,6 +80,16 @@ def evidence_supported_alias_relation(request: AgentBRequest, response: ChangeRe
         assessment.status = ReviewStatus.PASS
         assessment.explanation = f"Supplied page {pages[0]} explicitly presents this as another name; no contrary evidence cited"
         assessment.proposed_correction = ""
+
+
+def normalize_promotion_check(response: ChangeReview) -> None:
+    """Do not fail the OR-rule when the review itself affirms foundational identity."""
+    check = next((item for item in response.checks if item.category == ReviewCategory.DOT_PROMOTION), None)
+    if check and check.status == CheckStatus.FAIL and check.explanation and re.search(
+            r"\b(?:although|despite being) a foundational concept\b|\bis a foundational concept\b",
+            check.explanation, re.IGNORECASE):
+        check.status = CheckStatus.PASS
+        check.explanation = "Foundational identity satisfies the protocol's independent Dot criterion"
 
 
 def bind_issue_references(request: AgentBRequest, response: ChangeReview) -> None:

@@ -10,12 +10,14 @@ from typing import Any, Protocol
 from .agent_b_context import AgentBRequest, ReviewArtifacts, load_review_artifacts
 from .agent_b_batch import (BatchReviewRequest, build_batch_request, filter_unsupported_batch_issues,
                             systematic_issue_groups, validate_batch_review)
-from .agent_b_evidence import bind_issue_references, constrain_corrections, evidence_supported_alias_relation
+from .agent_b_evidence import (bind_issue_references, constrain_corrections,
+                                evidence_supported_alias_relation, explicit_alias_pages, normalize_promotion_check)
 from .agent_b_validators import validate_change
 from .review_checks import validate_check_coverage
 from .models import (Action, AliasRelation, ChangeReview, GlobalBatchReview, IssueSeverity, ReviewIssue, ReviewedChange,
                      ReviewResult, ReviewStatus, NoteChange, CheckStatus, ReviewCategory, ReviewCheck)
 from .vault import scan_vault
+from .registry import normalize
 from .workflows.university_review import UniversityReviewAdapter
 
 
@@ -134,6 +136,7 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         validate_check_coverage(response.checks, change.note_type)
         constrain_corrections(request, response)
         evidence_supported_alias_relation(request, response)
+        normalize_promotion_check(response)
         bind_issue_references(request, response)
         foreign = [issue for issue in response.issues if issue.change_path != change.target_path]
         if foreign:
@@ -172,6 +175,9 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         for alias in request.aliases_to_review:
             assessment = assessments.get(alias.casefold())
             if assessment is None:
+                if ("".join(normalize(alias).split()) == "".join(normalize(change.title).split())
+                        or explicit_alias_pages(request, alias)):
+                    continue
                 status = ReviewStatus.REVIEW_REQUIRED
                 issues.append(ReviewIssue(change_path=change.target_path, issue_type="evidence_gap",
                                           severity=IssueSeverity.HIGH,
@@ -190,7 +196,7 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                                           severity=IssueSeverity.MEDIUM,
                                           explanation=f"{alias}: {assessment.explanation}" +
                                               (" (relation lacks cited evidence)" if not assessment.evidence_refs else ""),
-                                          proposed_correction=(assessment.proposed_correction
+                                          proposed_correction=("Verify identity against the cited source and existing notes"
                                               if alias_status == ReviewStatus.REVIEW_REQUIRED
                                               else f"Remove alias '{alias}' from frontmatter"),
                                           evidence_refs=assessment.evidence_refs))

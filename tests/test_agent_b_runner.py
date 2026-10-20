@@ -212,3 +212,23 @@ def test_per_note_review_discards_issue_for_another_change(tmp_path: Path):
     result = review_staged_run(run, vault, Reviewer())
     assert result.reviewed_changes[0].status == ReviewStatus.PASS
     assert result.issues == []
+
+
+def test_orthographic_alias_does_not_require_invented_distinction(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
+    change = proposal.note_changes[0]
+    change.title = "Dataset"
+    change.target_path = "Dots/Dataset.md"
+    change.content = "---\ntype: concept\naliases: [Data Set]\n---\n# Dataset\nA is supported."
+    (run / "proposal.json").write_text(proposal.model_dump_json())
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[],
+                promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
+                    explanation="Independent", proposed_correction="", foundational_identity=True))
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert not any(issue.issue_type.value == "alias" for issue in result.issues)

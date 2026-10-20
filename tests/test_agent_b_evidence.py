@@ -1,5 +1,6 @@
 from sb_processor.agent_b_context import AgentBRequest, SourcePageEvidence
-from sb_processor.agent_b_evidence import bind_issue_references, constrain_corrections, evidence_supported_alias_relation
+from sb_processor.agent_b_evidence import (bind_issue_references, constrain_corrections,
+                                           evidence_supported_alias_relation, normalize_promotion_check)
 from sb_processor.models import (Action, AliasAssessment, ChangeReview, NoteChange, PromotionAssessment,
                                  ReviewCheck, CheckStatus, ReviewIssue, ReviewStatus)
 from sb_processor.review_checks import required_checks
@@ -80,3 +81,12 @@ def test_uncited_semantic_assertion_becomes_evidence_gap():
     assert review.issues[0].issue_type.value == "evidence_gap"
     assert review.status == ReviewStatus.REVIEW_REQUIRED
     assert "Split B" not in review.model_dump_json()
+
+
+def test_dot_promotion_respects_explicit_foundational_identity():
+    review = _review()
+    check = next(item for item in review.checks if item.category.value == "dot_promotion")
+    check.status = CheckStatus.FAIL
+    check.explanation = "Although a foundational concept, it is short."
+    normalize_promotion_check(review)
+    assert check.status == CheckStatus.PASS
