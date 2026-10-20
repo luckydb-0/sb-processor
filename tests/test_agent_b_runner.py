@@ -4,6 +4,12 @@ from pathlib import Path
 import pymupdf
 
 from sb_processor.agent_b import review_staged_run
+from sb_processor.models import ReviewCheck, CheckStatus
+from sb_processor.review_checks import required_checks
+
+def _checks():
+    return [ReviewCheck(category=category, status=CheckStatus.PASS) for category in required_checks("concept")]
+
 from sb_processor.models import (Action, AliasAssessment, ChangeReview, NoteChange, ProcessingProposal,
                                  PromotionAssessment,
                                  ReviewIssue, ReviewStatus)
@@ -43,9 +49,9 @@ def test_pass_stages_separate_review_and_preserves_proposal(tmp_path: Path):
 
     class Reviewer:
         def review_change(self, request, visual_images):
-            assert request.review_instructions == "REVIEW RULES"
+            assert "Detecting a problem does NOT grant permission" in request.review_instructions
             assert [p.page_number for p in request.source_evidence] == [1]
-            return ChangeReview(status=ReviewStatus.PASS, issues=[], promotion_assessment=PromotionAssessment(
+            return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[], promotion_assessment=PromotionAssessment(
                 status=ReviewStatus.PASS, explanation="Independent concept", proposed_correction=""))
 
     result = review_staged_run(run, vault, Reviewer())
@@ -61,9 +67,9 @@ def test_semantic_issue_becomes_review_required_without_mutating_original(tmp_pa
 
     class Reviewer:
         def review_change(self, request, visual_images):
-            return ChangeReview(status=ReviewStatus.REVIEW_REQUIRED, issues=[ReviewIssue(
+            return ChangeReview(checks=_checks(), status=ReviewStatus.REVIEW_REQUIRED, issues=[ReviewIssue(
                 change_path=request.proposal_change.target_path, issue_type="concept_boundary", severity="high",
-                explanation="May need a split", proposed_correction="Human should decide")],
+                explanation="May need a split", proposed_correction="Human should decide", source_pages=[1])],
                 promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
                                                          explanation="Independent concept", proposed_correction=""))
 
@@ -81,7 +87,7 @@ def test_visual_page_image_is_exposed_to_review_client(tmp_path: Path):
             assert len(visual_images) == 1
             assert visual_images[0][0] == 1
             assert visual_images[0][1].startswith("data:image/png;base64,")
-            return ChangeReview(status=ReviewStatus.PASS, issues=[], promotion_assessment=PromotionAssessment(
+            return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[], promotion_assessment=PromotionAssessment(
                 status=ReviewStatus.PASS, explanation="Independent concept", proposed_correction=""))
 
     review_staged_run(run, vault, Reviewer())
@@ -111,7 +117,7 @@ def test_invalid_alias_and_weak_dot_are_reported_separately(tmp_path: Path):
     class Reviewer:
         def review_change(self, request, visual_images):
             assert request.aliases_to_review == ["K-Fold A"]
-            return ChangeReview(status=ReviewStatus.PASS, issues=[], alias_assessments=[AliasAssessment(
+            return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[], alias_assessments=[AliasAssessment(
                 alias="K-Fold A", status=ReviewStatus.REVIEW_REQUIRED, relation="SUBTYPE",
                 explanation="Subtype", proposed_correction="Remove alias")],
                 promotion_assessment=PromotionAssessment(status=ReviewStatus.REVIEW_REQUIRED,
@@ -143,7 +149,7 @@ def test_generic_runner_accepts_a_workflow_review_adapter(tmp_path: Path):
     class Reviewer:
         def review_change(self, request, visual_images):
             assert request.workflow == "book" and request.review_instructions == "BOOK RULES"
-            return ChangeReview(status=ReviewStatus.PASS, issues=[], promotion_assessment=PromotionAssessment(
+            return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[], promotion_assessment=PromotionAssessment(
                 status=ReviewStatus.PASS, explanation="Independent", proposed_correction=""))
 
     result = review_staged_run(run, vault, Reviewer(), adapter=BookReviewAdapter())
@@ -158,7 +164,7 @@ def test_clear_subtype_alias_is_fix_even_if_model_requests_review(tmp_path: Path
 
     class Reviewer:
         def review_change(self, request, visual_images):
-            return ChangeReview(status=ReviewStatus.REVIEW_REQUIRED, issues=[], alias_assessments=[AliasAssessment(
+            return ChangeReview(checks=_checks(), status=ReviewStatus.REVIEW_REQUIRED, issues=[], alias_assessments=[AliasAssessment(
                 alias="K-Fold A", relation="SUBTYPE", status=ReviewStatus.REVIEW_REQUIRED,
                 explanation="A subtype of A", proposed_correction="Review")],
                 promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,

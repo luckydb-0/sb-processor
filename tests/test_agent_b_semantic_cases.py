@@ -6,6 +6,12 @@ from pathlib import Path
 import pytest
 
 from sb_processor.agent_b import review_staged_run
+from sb_processor.models import ReviewCheck, CheckStatus
+from sb_processor.review_checks import required_checks
+
+def _checks():
+    return [ReviewCheck(category=category, status=CheckStatus.PASS) for category in required_checks("concept")]
+
 from sb_processor.models import (Action, AliasAssessment, ChangeReview, NoteChange,
                                  ProcessingProposal, PromotionAssessment, ReviewIssue,
                                  ReviewStatus)
@@ -39,7 +45,7 @@ def test_semantic_findings_have_per_change_status_and_source_evidence(
     class Reviewer:
         def review_change(self, request, visual_images):
             assert request.source_evidence[0].page_number == 2
-            return ChangeReview(status=status, issues=[ReviewIssue(
+            return ChangeReview(checks=_checks(), status=status, issues=[ReviewIssue(
                 change_path=request.proposal_change.target_path, issue_type=issue_type,
                 severity="high", explanation=explanation, proposed_correction="Correct or remove claim",
                 source_pages=[2], corrected_content="---\ntype: concept\n---\n# A\nCorrected" if status == ReviewStatus.FIX else None)],

@@ -146,6 +146,48 @@ class ReviewStatus(str, Enum):
     REVIEW_REQUIRED = "REVIEW_REQUIRED"
 
 
+class CheckStatus(str, Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+
+
+class ReviewCategory(str, Enum):
+    SOURCE_FIDELITY = "source_fidelity"
+    CLAIM_STRENGTH = "claim_strength"
+    SOURCE_INDEPENDENCE = "source_independence"
+    SOURCE_SPECIFIC_RESULTS = "source_specific_results"
+    PROVENANCE = "provenance"
+    METADATA = "metadata"
+    DUPLICATE_CONCEPT = "duplicate_concept"
+    EXISTING_NOTE_INTEGRITY = "existing_note_integrity"
+    DOT_PROMOTION = "dot_promotion"
+    CONCEPT_BOUNDARIES = "concept_boundaries"
+    ALIASES = "aliases"
+    LINKS = "links"
+    MAP_STRUCTURE = "map_structure"
+    COURSE_STRUCTURE = "course_structure"
+    LECTURE_STRUCTURE = "lecture_structure"
+    SYNTHESIS = "synthesis"
+    WORKFLOW_CONTAMINATION = "workflow_contamination"
+    NAMING = "naming"
+    CUMULATIVE_INTEGRITY = "cumulative_integrity"
+
+
+class SourceReference(StrictModel):
+    page: int | None = None
+    note_path: str | None = None
+    reference: str
+
+
+class ReviewCheck(StrictModel):
+    category: ReviewCategory
+    status: CheckStatus
+    explanation: str | None = None
+    evidence_refs: list[SourceReference] = Field(default_factory=list)
+
+
 class IssueSeverity(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
@@ -183,12 +225,14 @@ class ReviewIssue(StrictModel):
     explanation: str
     proposed_correction: str
     source_pages: list[int] = Field(default_factory=list)
+    evidence_refs: list[SourceReference] = Field(default_factory=list)
     corrected_content: str | None = None
 
 
 class ReviewedChange(StrictModel):
     change_path: str
     status: ReviewStatus
+    checks: list[ReviewCheck]
     issue_indices: list[int] = Field(default_factory=list)
 
 
@@ -226,5 +270,6 @@ class PromotionAssessment(StrictModel):
 class ChangeReview(StrictModel):
     status: ReviewStatus
     issues: list[ReviewIssue]
+    checks: list[ReviewCheck]
     alias_assessments: list[AliasAssessment] = Field(default_factory=list)
     promotion_assessment: PromotionAssessment | None = None

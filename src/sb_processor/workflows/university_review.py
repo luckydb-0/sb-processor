@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+from importlib.resources import files
 
 import pymupdf
 
@@ -13,7 +14,10 @@ from ..models import NoteChange
 
 class UniversityReviewAdapter:
     def instructions(self, vault: Path) -> str:
-        return (vault / "+ Inbox" / "Agent B - University Processing Review Instructions.md").read_text(encoding="utf-8")
+        canonical = vault / "+ Inbox" / "Agent B - University Processing Review Instructions.md"
+        if not canonical.is_file():
+            raise FileNotFoundError(f"Canonical Agent B protocol is missing: {canonical}")
+        return files("sb_processor").joinpath("prompts/agent_b_university_checklist.md").read_text(encoding="utf-8")
 
     def build_request(self, artifacts: ReviewArtifacts, change: NoteChange,
                       instructions: str) -> AgentBRequest:

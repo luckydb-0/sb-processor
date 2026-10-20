@@ -13,7 +13,8 @@ import yaml
 
 from .agent_a import ExistingNoteContext
 from .extraction import ProcessingCompleteness
-from .models import Action, NoteChange, ProcessingProposal, StrictModel
+from .models import Action, NoteChange, ProcessingProposal, ReviewCategory, StrictModel
+from .review_checks import required_checks
 from .registry import normalize
 
 
@@ -42,6 +43,7 @@ class AgentBRequest(StrictModel):
     retrieval_evidence: list[dict[str, Any]]
     document_completeness: ProcessingCompleteness | None = None
     review_instructions: str
+    required_checks: list[ReviewCategory]
 
 
 @dataclass(frozen=True)
@@ -173,4 +175,5 @@ def build_review_request(artifacts: ReviewArtifacts, change: NoteChange, instruc
         retrieval_evidence=relevant_retrieval,
         document_completeness=artifacts.proposal.source_completeness,
         review_instructions=instructions,
+        required_checks=required_checks(change.note_type),
     )
