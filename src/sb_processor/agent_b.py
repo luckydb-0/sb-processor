@@ -253,6 +253,10 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
             if check.category in failed:
                 check.status = CheckStatus.FAIL
                 check.explanation = check.explanation or "Deterministic validator found an objective error"
+            if check.category == ReviewCategory.ALIASES and request.aliases_to_review and not any(
+                    issue.issue_type.value == "alias" for issue in issues):
+                check.status = CheckStatus.PASS
+                check.explanation = "Proposed aliases have direct identity or orthographic evidence"
         reviewed.append(ReviewedChange(change_path=change.target_path, status=status,
                                        checks=checks,
                                        issue_indices=list(range(start, len(all_issues)))))

@@ -232,3 +232,4 @@ def test_orthographic_alias_does_not_require_invented_distinction(tmp_path: Path
     result = review_staged_run(run, vault, Reviewer())
     assert result.reviewed_changes[0].status == ReviewStatus.PASS
     assert not any(issue.issue_type.value == "alias" for issue in result.issues)
+    assert next(check for check in result.reviewed_changes[0].checks if check.category.value == "aliases").status == CheckStatus.PASS
