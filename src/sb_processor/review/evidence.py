@@ -35,7 +35,7 @@ def explicit_alias_pages(request: AgentBRequest, alias: str) -> list[int]:
 
 def _unsupported_examples(correction: str, request: AgentBRequest) -> bool:
     evidence = normalize(" ".join([*(page.text + " " + page.visual_extraction for page in request.source_evidence),
-        *(note.body for note in request.affected_existing_notes)]))
+        *(note.existing_content for note in request.affected_existing_notes)]))
     terms = set(evidence.split())
     for match in _EXAMPLE.finditer(correction):
         example_terms = {word for word in normalize(match.group(1)).split() if len(word) > 3 and word not in _STOP}

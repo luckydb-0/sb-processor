@@ -13,7 +13,7 @@ import yaml
 
 from ..processing.agent_a import ExistingNoteContext
 from ..documents.extraction import ProcessingCompleteness
-from ..models import Action, NoteChange, ProcessingProposal, ReviewCategory, StrictModel
+from ..models import Action, CandidateMatch, NoteChange, ProcessingProposal, ReviewCategory, StrictModel
 from .checks import required_checks
 from ..knowledge.registry import normalize
 
@@ -25,9 +25,29 @@ class SourcePageEvidence(StrictModel):
     visual_status: str = "NOT_REQUIRED"
 
 
+class ProposedReviewChange(StrictModel):
+    action: Action
+    note_type: str
+    title: str
+    target_path: str
+    reason: str
+    proposed_final_content: str
+    sources: list[str]
+    candidate_existing_notes: list[CandidateMatch]
+    original_content_hash: str | None
+
+
+class ExistingReviewNote(StrictModel):
+    path: str
+    title: str
+    note_type: str | None
+    existing_content: str
+    review_role: str
+
+
 class AgentBRequest(StrictModel):
     workflow: str
-    proposal_change: NoteChange
+    proposal_change: ProposedReviewChange
     proposal_summary: str
     other_proposed_changes: list[dict[str, str]] = Field(default_factory=list)
     concept_resolution: dict[str, Any] | None = None
@@ -40,7 +60,7 @@ class AgentBRequest(StrictModel):
     requires_promotion_assessment: bool = False
     source_pages_available: int
     evidence_selection: str
-    affected_existing_notes: list[ExistingNoteContext]
+    affected_existing_notes: list[ExistingReviewNote]
     retrieval_evidence: list[dict[str, Any]]
     document_completeness: ProcessingCompleteness | None = None
     review_instructions: str
@@ -139,8 +159,13 @@ def build_review_request(artifacts: ReviewArtifacts, change: NoteChange, instruc
     related_paths.update(match.path for match in change.candidate_existing_notes)
     for item in relevant_retrieval:
         related_paths.update(hit.get("path", "") for hit in item.get("retrieved", []))
-    existing = [ExistingNoteContext.model_validate(item) for item in context.get("relevant_existing_notes", [])
-                if item.get("path") in related_paths]
+    existing = [ExistingReviewNote(path=note.path, title=note.title, note_type=note.note_type,
+                                  existing_content=note.body,
+                                  review_role="pre_update_target" if change.action == Action.UPDATE and
+                                      note.path == change.target_path else "related_existing_note")
+                for item in context.get("relevant_existing_notes", [])
+                if item.get("path") in related_paths
+                for note in [ExistingNoteContext.model_validate(item)]]
     resolution = next((item.model_dump(mode="json") for item in artifacts.proposal.concept_resolutions
                        if normalize(item.candidate_name) == name or item.existing_path == change.target_path), None)
     aliases: list[str] = []
@@ -157,7 +182,8 @@ def build_review_request(artifacts: ReviewArtifacts, change: NoteChange, instruc
                    for alias in match.aliases]
     return AgentBRequest(
         workflow=artifacts.proposal.workflow,
-        proposal_change=change,
+        proposal_change=ProposedReviewChange.model_validate({
+            **change.model_dump(exclude={"content"}), "proposed_final_content": change.content}),
         proposal_summary=artifacts.proposal.source_summary,
         other_proposed_changes=[{"path": item.target_path, "title": item.title, "note_type": item.note_type,
                                  "action": item.action.value} for item in artifacts.proposal.note_changes

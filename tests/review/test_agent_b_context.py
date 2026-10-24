@@ -31,6 +31,32 @@ def test_review_request_selects_provenance_pages_and_affected_notes(tmp_path: Pa
     assert request.review_instructions == "RULES"
 
 
+def test_dataset_update_serializes_proposed_final_content_separately_from_old_note(tmp_path: Path):
+    """The v1.1 Dataset reviewer treated the pre-update body as the proposed result."""
+    old = "A dataset is a table of examples."
+    proposed = ("---\ntype: concept\n---\n# Dataset\n"
+                "Real-world data need not start as tables; some techniques require transformation into a table-like form.")
+    change = NoteChange(action=Action.UPDATE, note_type="concept", title="Dataset",
+        target_path="Dots/Dataset.md", reason="Add broader account", content=proposed,
+        sources=["lecture.pdf"], candidate_existing_notes=[], original_content_hash="prior-hash")
+    proposal = ProcessingProposal(workflow="university", source="lecture.pdf", source_summary="Dataset",
+        vault_note_count=1, note_changes=[change], review_required=[])
+    (tmp_path / "proposal.json").write_text(proposal.model_dump_json())
+    (tmp_path / "request_context.json").write_text(json.dumps({"source_metadata": {},
+        "source_text": "[Page 1]\nTEXT:\nReal data may require transformation into tables.",
+        "relevant_existing_notes": [{"path": "Dots/Dataset.md", "title": "Dataset",
+                                    "note_type": "concept", "body": old}]}))
+    (tmp_path / "source_analysis.json").write_text(json.dumps({"candidate_concepts": [
+        {"proposed_name": "Dataset", "source_pages": [1]}]}))
+    (tmp_path / "retrieval_evidence.json").write_text("[]")
+
+    payload = build_review_request(load_review_artifacts(tmp_path), change, "RULES").model_dump(mode="json")
+    assert "transformation into a table-like form" in payload["proposal_change"]["proposed_final_content"]
+    assert "content" not in payload["proposal_change"]
+    assert payload["affected_existing_notes"][0]["existing_content"] == old
+    assert "body" not in payload["affected_existing_notes"][0]
+
+
 def test_renamed_concept_uses_overlapping_discovery_provenance(tmp_path: Path):
     change = NoteChange(action=Action.CREATE, note_type="concept", title="Knowledge Discovery Process",
                         target_path="Dots/Knowledge Discovery Process.md", reason="normalized title",

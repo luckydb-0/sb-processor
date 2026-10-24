@@ -57,6 +57,8 @@ def test_pass_stages_separate_review_and_preserves_proposal(tmp_path: Path):
     class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             assert "Detecting a problem does NOT grant permission" in request.review_instructions
+            assert "proposed_final_content" in request.review_instructions
+            assert "primary review target" in request.review_instructions
             assert [p.page_number for p in request.source_evidence] == [1]
             return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[], promotion_assessment=PromotionAssessment(
                 status=ReviewStatus.PASS, explanation="Independent concept", proposed_correction=""))
