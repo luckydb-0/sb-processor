@@ -14,6 +14,8 @@ from .evidence import (bind_issue_references, constrain_corrections,
                                 evidence_supported_alias_relation, explicit_alias_pages, normalize_promotion_check)
 from .validators import validate_change
 from .checks import validate_check_coverage
+from .retry import (TargetedRetryRequest, TargetedRetryResult, issue_category, make_retry_request,
+                    reconcile_retry, unsupported_failures)
 from ..models import (Action, AliasRelation, ChangeReview, GlobalBatchReview, IssueSeverity, ReviewIssue, ReviewedChange,
                      ReviewResult, ReviewStatus, NoteChange, CheckStatus, ReviewCategory, ReviewCheck, SourceReference)
 from ..knowledge.vault import scan_vault
@@ -24,6 +26,8 @@ from ..workflows.university_review import UniversityReviewAdapter
 class AgentBClient(Protocol):
     def review_change(self, request: AgentBRequest,
                       visual_images: list[tuple[int, str]]) -> ChangeReview: ...
+    def review_failed_checks(self, request: TargetedRetryRequest,
+                             visual_images: list[tuple[int, str]]) -> TargetedRetryResult: ...
     def review_batch(self, request: BatchReviewRequest) -> GlobalBatchReview: ...
 
 
@@ -73,6 +77,22 @@ class OpenAIAgentBClient:
             raise ValueError(f"Agent B global review did not complete (status={response.status})")
         return GlobalBatchReview.model_validate(response.output_parsed)
 
+    def review_failed_checks(self, request: TargetedRetryRequest,
+                             visual_images: list[tuple[int, str]]) -> TargetedRetryResult:
+        content: list[dict[str, Any]] = [{"type": "input_text", "text": request.model_dump_json()}]
+        for number, data_url in visual_images:
+            content.extend([{"type": "input_text", "text": f"Original rendered source page {number}:"},
+                            {"type": "input_image", "image_url": data_url, "detail": "high"}])
+        response = self.client.responses.parse(
+            model=self.model,
+            input=[{"role": "system", "content": "You are independent Agent B. Retry only the listed failed checks. The proposed final note is the primary target. Use only supplied evidence. Do not invent facts, examples, issues, or corrections. Return one check per listed category and only directly supported issues."},
+                   {"role": "user", "content": content}],
+            text_format=TargetedRetryResult, store=False,
+        )
+        if response.status != "completed" or response.output_parsed is None:
+            raise ValueError(f"Agent B targeted retry did not complete (status={response.status})")
+        return TargetedRetryResult.model_validate(response.output_parsed)
+
 
 def _status(statuses: list[ReviewStatus]) -> ReviewStatus:
     if ReviewStatus.REVIEW_REQUIRED in statuses:
@@ -120,6 +140,9 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
     all_issues: list[ReviewIssue] = []
     reviewed: list[ReviewedChange] = []
     requests: list[AgentBRequest] = []
+    retry_requests: list[TargetedRetryRequest] = []
+    retry_results: list[TargetedRetryResult] = []
+    retry_records: list[dict[str, Any]] = []
     visual_inspected: set[int] = set()
     for change in artifacts.proposal.note_changes:
         request = adapter.build_request(artifacts, change, instructions)
@@ -137,6 +160,15 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         constrain_corrections(request, response)
         evidence_supported_alias_relation(request, response)
         normalize_promotion_check(response)
+        missing_support = unsupported_failures(request, response)
+        retry_record = None
+        if missing_support:
+            retry_request = make_retry_request(request, response, missing_support)
+            retry_result = TargetedRetryResult.model_validate(llm.review_failed_checks(retry_request, images))
+            retry_record = reconcile_retry(request, response, retry_request, retry_result)
+            retry_requests.append(retry_request)
+            retry_results.append(retry_result)
+            retry_records.append(retry_record)
         bind_issue_references(request, response)
         foreign = [issue for issue in response.issues if issue.change_path != change.target_path]
         if foreign:
@@ -169,8 +201,18 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                 for issue in semantic_issues) and not any(
                     check.status == CheckStatus.INSUFFICIENT_EVIDENCE for check in response.checks):
             status = ReviewStatus.FIX if semantic_issues else ReviewStatus.PASS
-        if any(check.status == CheckStatus.INSUFFICIENT_EVIDENCE for check in response.checks):
+        if retry_record and retry_record["blocking_uncertainty"]:
             status = ReviewStatus.REVIEW_REQUIRED
+            for category in retry_record["blocking_uncertainty"]:
+                issue_type = {"concept_boundaries": "concept_boundary", "duplicate_concept": "duplicate_concept",
+                              "dot_promotion": "dot_promotion", "existing_note_integrity": "existing_note",
+                              "cumulative_integrity": "cumulative_integrity"}[category]
+                issues.append(ReviewIssue(change_path=change.target_path, issue_type=issue_type,
+                    severity=IssueSeverity.MEDIUM,
+                    explanation=f"Supplied evidence does not resolve the {category} decision",
+                    proposed_correction="Decide the conceptual relationship using additional source or existing-note evidence",
+                    evidence_refs=[SourceReference(note_path=change.target_path,
+                        reference="Targeted retry could not resolve this decision")]))
         assessments = {item.alias.casefold(): item for item in response.alias_assessments}
         for alias in request.aliases_to_review:
             assessment = assessments.get(alias.casefold())
@@ -255,23 +297,9 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                     issue.issue_type.value == "alias" for issue in issues):
                 check.status = CheckStatus.PASS
                 check.explanation = "Proposed aliases have direct identity or orthographic evidence"
-        issue_categories = {
-            "source_independent_wording": ReviewCategory.SOURCE_INDEPENDENCE,
-            "source_specific_result": ReviewCategory.SOURCE_SPECIFIC_RESULTS,
-            "existing_note": ReviewCategory.EXISTING_NOTE_INTEGRITY,
-            "concept_boundary": ReviewCategory.CONCEPT_BOUNDARIES,
-            "duplicate_concept": ReviewCategory.DUPLICATE_CONCEPT,
-            "dot_promotion": ReviewCategory.DOT_PROMOTION,
-            "alias": ReviewCategory.ALIASES,
-            "link": ReviewCategory.LINKS,
-            "map": ReviewCategory.MAP_STRUCTURE,
-            "course": ReviewCategory.COURSE_STRUCTURE,
-            "lecture": ReviewCategory.LECTURE_STRUCTURE,
-            "verbosity": ReviewCategory.SYNTHESIS,
-        }
-        covered = {issue_categories.get(issue.issue_type.value, issue.issue_type.value) for issue in issues}
+        covered = {issue_category(issue) for issue in issues}
         orphan_failures = [check for check in checks if check.status == CheckStatus.FAIL
-                           and check.category not in covered and check.category.value not in covered]
+                           and check.category not in covered]
         if orphan_failures:
             status = ReviewStatus.REVIEW_REQUIRED
             categories = ", ".join(check.category.value for check in orphan_failures)
@@ -286,6 +314,8 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         reviewed.append(ReviewedChange(change_path=change.target_path, status=status,
                                        checks=checks,
                                        issue_indices=list(range(start, len(all_issues)))))
+        if retry_record is not None:
+            retry_record["final_escalation"] = status == ReviewStatus.REVIEW_REQUIRED
         requests.append(request)
     result = ReviewResult(overall_status=_status([item.status for item in reviewed]),
                           issues=all_issues, reviewed_changes=reviewed)
@@ -309,13 +339,14 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
     canonical_path = vault / "+ Inbox" / "Agent B - University Processing Review Instructions.md"
     canonical_chars = len(canonical_path.read_text(encoding="utf-8")) if canonical_path.is_file() else None
     _stage_review(run, artifacts.proposal.model_dump(mode="json"), requests, result, visual_inspected,
-                  batch_request, canonical_chars)
+                  batch_request, canonical_chars, retry_requests, retry_results, retry_records)
     return result
 
 
 def _stage_review(run: Path, proposal: dict[str, Any], requests: list[AgentBRequest],
                   result: ReviewResult, visual_inspected: set[int], batch_request: BatchReviewRequest,
-                  canonical_chars: int | None) -> None:
+                  canonical_chars: int | None, retry_requests: list[TargetedRetryRequest],
+                  retry_results: list[TargetedRetryResult], retry_records: list[dict[str, Any]]) -> None:
     output = run / "agent_b"
     output.mkdir(exist_ok=True)
     (output / "review.json").write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -324,6 +355,15 @@ def _stage_review(run: Path, proposal: dict[str, Any], requests: list[AgentBRequ
     requests_dir.mkdir(exist_ok=True)
     for index, request in enumerate(requests, 1):
         (requests_dir / f"{index:03d}.json").write_text(request.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    if retry_requests:
+        retry_dir = output / "retries"
+        retry_dir.mkdir(exist_ok=True)
+        for index, (request, response) in enumerate(zip(retry_requests, retry_results, strict=True), 1):
+            (retry_dir / f"{index:03d}_request.json").write_text(request.model_dump_json(indent=2) + "\n",
+                                                                 encoding="utf-8")
+            (retry_dir / f"{index:03d}_response.json").write_text(response.model_dump_json(indent=2) + "\n",
+                                                                  encoding="utf-8")
+        (retry_dir / "outcomes.json").write_text(json.dumps(retry_records, indent=2) + "\n", encoding="utf-8")
     correction_root = output / "corrected_notes"
     for issue in result.issues:
         if issue.corrected_content is None:
@@ -348,8 +388,18 @@ def _stage_review(run: Path, proposal: dict[str, Any], requests: list[AgentBRequ
         "batch_request_chars": len(batch_request.model_dump_json()),
         "rejected_global_issue_count": len(result.rejected_global_issues),
         "request_chars_by_change": request_sizes,
-        "total_request_chars": sum(request_sizes) + len(batch_request.model_dump_json()),
-        "estimated_tokens": (sum(request_sizes) + len(batch_request.model_dump_json()) + 3) // 4,
+        "retry_count": len(retry_records),
+        "retry_checks_retried": sum(len(item["checks_retried"]) for item in retry_records),
+        "retry_issues_recovered": sum(item["issues_recovered"] for item in retry_records),
+        "retry_checks_changed_to_pass": sum(item["changed_to_pass"] for item in retry_records),
+        "retry_checks_changed_to_insufficient_evidence": sum(item["changed_to_insufficient_evidence"] for item in retry_records),
+        "retry_final_escalations": sum(item["final_escalation"] for item in retry_records),
+        "retry_request_chars": sum(item["retry_request_chars"] for item in retry_records),
+        "retry_estimated_tokens": (sum(item["retry_request_chars"] for item in retry_records) + 3) // 4,
+        "total_request_chars": sum(request_sizes) + len(batch_request.model_dump_json()) +
+                               sum(item["retry_request_chars"] for item in retry_records),
+        "estimated_tokens": (sum(request_sizes) + len(batch_request.model_dump_json()) +
+                             sum(item["retry_request_chars"] for item in retry_records) + 3) // 4,
         "deterministic_validators": ["frontmatter schema", "lecture identifier and source metadata", "concept PDF provenance", "workflow contamination", "wikilink integrity", "canonical link paths", "Map basename collision", "source-dependent phrase precheck"],
     }
     (output / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8")
