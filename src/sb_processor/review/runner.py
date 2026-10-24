@@ -24,6 +24,9 @@ from ..knowledge.vault import scan_vault
 from ..knowledge.registry import normalize
 from ..workflows.university_review import UniversityReviewAdapter
 
+DEFAULT_REVIEW_MODEL = "gpt-5.4-mini"
+DEFAULT_REVIEW_REASONING_EFFORT = "low"
+
 
 class AgentBClient(Protocol):
     def review_change(self, request: AgentBRequest,

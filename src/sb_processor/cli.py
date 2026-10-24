@@ -6,7 +6,8 @@ import os
 from pathlib import Path
 
 from .processing.llm import OpenAILLMClient
-from .review.runner import OpenAIAgentBClient, review_staged_run
+from .review.runner import (DEFAULT_REVIEW_MODEL, DEFAULT_REVIEW_REASONING_EFFORT,
+                            OpenAIAgentBClient, review_staged_run)
 from .documents.ingestion import ingest_pdf, stage_ingestion
 from .documents.pdf import compare_pdf_extractors
 from .processing.pipeline import process_source
@@ -51,14 +52,16 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--instructions", type=Path)
     process.add_argument("--with-agent-b", action="store_true", help="Review the staged proposal with Agent B")
     process.add_argument("--agent-b-instructions", type=Path)
-    process.add_argument("--agent-b-model", default="gpt-4o-mini")
-    process.add_argument("--agent-b-reasoning-effort", choices=["none", "minimal", "low", "medium", "high", "xhigh"])
+    process.add_argument("--agent-b-model", default=DEFAULT_REVIEW_MODEL)
+    process.add_argument("--agent-b-reasoning-effort", default=DEFAULT_REVIEW_REASONING_EFFORT,
+                         choices=["none", "minimal", "low", "medium", "high", "xhigh"])
     review = sub.add_parser("review", help="Run Agent B on an existing staged Agent A proposal")
     review.add_argument("--run", type=Path, required=True)
     review.add_argument("--vault", type=Path, required=True)
     review.add_argument("--instructions", type=Path)
-    review.add_argument("--model", default="gpt-4o-mini")
-    review.add_argument("--reasoning-effort", choices=["none", "minimal", "low", "medium", "high", "xhigh"])
+    review.add_argument("--model", default=DEFAULT_REVIEW_MODEL)
+    review.add_argument("--reasoning-effort", default=DEFAULT_REVIEW_REASONING_EFFORT,
+                        choices=["none", "minimal", "low", "medium", "high", "xhigh"])
     compare = sub.add_parser("compare-pdf", help="Compare raw and cleaned PDF conversions without calling an LLM")
     compare.add_argument("--source", type=Path, required=True)
     compare.add_argument("--output-dir", type=Path, default=Path("staging/comparisons"))
