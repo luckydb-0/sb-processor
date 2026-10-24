@@ -4,7 +4,7 @@
 
 This package reads an Obsidian vault, builds disposable SQLite and local vector indexes, extracts one source, runs two structured Agent A passes, checks draft paths and existing-note matches, and stages the result. It never writes to the vault. The university workflow is the first source adapter; its compact instructions and templates stay in the vault as external inputs.
 
-Pass 1 receives page-aware source evidence, completeness, compact instructions, and no existing Concept Note bodies. It returns `SourceAnalysis` with candidate concepts, maps, source-level note candidates, and observations, without vault actions. A deterministic supplement adds short explicit “What is a/an X?” definition headings missed by the model. A configurable cap keeps the highest-importance concepts for Pass 2 and reports omissions. `retrieval.py` searches each candidate independently against policy-filtered SQLite metadata and local semantic results. Pass 2 receives selected full note bodies and resolves conceptual relationships before returning a validated `ProcessingProposal`. The vector index is a disposable derivative of global `Dots/` knowledge notes. Agent B independently reviews the staged proposal.
+Pass 1 receives page-aware source evidence, completeness, compact instructions, and no existing Concept Note bodies. It returns `SourceAnalysis` with candidate concepts, maps, source-level note candidates, and observations, without vault actions. A deterministic supplement adds short explicit “What is a/an X?” definition headings missed by the model. A configurable cap keeps the highest-importance concepts for Pass 2 and reports omissions. `knowledge/retrieval.py` searches each candidate independently against policy-filtered SQLite metadata and local semantic results. Pass 2 receives selected full note bodies and resolves conceptual relationships before returning a validated `ProcessingProposal`. The vector index is a disposable derivative of global `Dots/` knowledge notes. Agent B independently reviews the staged proposal.
 
 ## Files and responsibilities
 
@@ -13,30 +13,43 @@ sb-processor/
   pyproject.toml                 dependencies and CLI package
   README.md                      setup and commands
   src/sb_processor/
-    models.py                    validated scan, draft, proposal, review contracts
-    vault.py                     read-only Markdown/frontmatter scanner
-    registry.py                  rebuildable SQLite index and deterministic lookup
-    retrieval.py                 path/type policy and metadata-first ranking
-    semantic.py                  FastEmbed ONNX and persistent local Qdrant index
-    agent_a.py                   typed request assembly and context diagnostics
-    agent_b_context.py           selective per-change source and retrieval evidence
-    agent_b_validators.py        deterministic note and wikilink checks
-    agent_b.py                   independent structured review runner and staging
-    pdf.py                       compatibility wrapper for local PDF options
-    extraction.py                page-aware extractor adapters and provenance models
-    cleaning.py                  deterministic, auditable document cleanup
-    visual.py                    selective page renderer, visual adapter, cache
-    ingestion.py                 generic PDF ingestion and inspection artifacts
-    comparison.py                raw/clean benchmark artifacts and metrics
-    llm.py                       LLMClient and OpenAI Responses implementation
-    pipeline.py                  generic orchestration and safety reconciliation
-    staging.py                   staged JSON, Markdown, and report writer
-    cli.py                       command-line entry point
+    models.py                    shared validated scan, proposal, and review contracts
+    cli.py                       command-line composition root
+    documents/
+      extraction.py              page-aware extractor adapters and provenance models
+      cleaning.py                deterministic, auditable document cleanup
+      visual.py                  selective page renderer, visual adapter, cache
+      ingestion.py               generic PDF ingestion and inspection artifacts
+      comparison.py              raw/clean benchmark artifacts and metrics
+      pdf.py                     compatibility wrapper for local PDF options
+    knowledge/
+      vault.py                   read-only Markdown/frontmatter scanner
+      registry.py                rebuildable SQLite index and deterministic lookup
+      retrieval.py               path/type policy and metadata-first ranking
+      semantic.py                FastEmbed ONNX and persistent local Qdrant index
+    processing/
+      agent_a.py                 typed request assembly and context diagnostics
+      llm.py                     LLMClient and OpenAI Responses implementation
+      pipeline.py                generic orchestration and safety reconciliation
+      staging.py                 staged JSON, Markdown, and report writer
+    review/
+      runner.py                  independent structured review runner and staging
+      context.py                 selective per-change source and retrieval evidence
+      evidence.py                evidence binding and correction constraints
+      validators.py              deterministic note and wikilink checks
+      batch.py                   aggregate review request and issue grouping
+      checks.py                  mandatory review-check definitions
     workflows/university.py      university paths and external instructions/templates
     workflows/university_review.py university review rules and PDF page images
     prompts/university.md        small workflow prompt
     prompts/visual_page.md       visual-only extraction instructions
-  tests/                         deterministic behavior and fake-LLM integration
+  tests/
+    documents/                   extraction, cleanup, ingestion, and visual tests
+    knowledge/                   vault, registry, retrieval, and semantic tests
+    processing/                  Agent A, proposal, pipeline, and staging tests
+    review/                      Agent B context, evidence, validator, and runner tests
+    workflows/                   source-specific adapter tests
+    test_cli.py                  cross-feature command-line tests
 ```
 
 ## Data flow
