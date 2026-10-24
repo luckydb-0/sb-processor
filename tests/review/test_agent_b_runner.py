@@ -68,6 +68,7 @@ def test_pass_stages_separate_review_and_preserves_proposal(tmp_path: Path):
     assert (run / "agent_b" / "review.json").exists()
     assert (run / "agent_b" / "detailed_report.md").exists()
     assert (run / "SUMMARY.md").exists()
+    assert "## Needs human decision" in (run / "SUMMARY.md").read_text()
     assert (run / "agent_b" / "diagnostics.json").exists()
     assert (run / "proposal.json").read_bytes() == original
 

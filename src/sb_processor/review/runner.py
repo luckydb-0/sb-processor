@@ -434,9 +434,12 @@ def _stage_summary(run: Path, result: ReviewResult) -> None:
     lines += ["", f"## Auto-fixable — {counts[ReviewStatus.FIX]}", ""]
     lines.extend(f"- {item.change_path.rsplit('/', 1)[-1].removesuffix('.md')}" for item in result.reviewed_changes
                  if item.status == ReviewStatus.FIX)
-    lines += ["", f"## Needs review — {counts[ReviewStatus.REVIEW_REQUIRED]}", "",
-              "Some items need a conceptual decision; others need better reviewer evidence.", "",
-              "## Systematic issues", ""]
+    lines += ["", f"## Needs human decision — {counts[ReviewStatus.REVIEW_REQUIRED]}", ""]
+    lines.extend(f"- {item.change_path.rsplit('/', 1)[-1].removesuffix('.md')}"
+                 for item in result.reviewed_changes if item.status == ReviewStatus.REVIEW_REQUIRED)
+    if not counts[ReviewStatus.REVIEW_REQUIRED]:
+        lines.append("None.")
+    lines += ["", "## Systematic issues", ""]
     if not groups and not (result.global_review and result.global_review.issues):
         lines.append("None identified.")
     for group in groups:
