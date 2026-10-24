@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .models import Action, DraftChange, NoteMetadata, ProcessingProposal
+from ..models import Action, DraftChange, NoteMetadata, ProcessingProposal
 from .agent_a import ContextDiagnostics
-from .knowledge.registry import normalize
+from ..knowledge.registry import normalize
 
 log = logging.getLogger(__name__)
 

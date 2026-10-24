@@ -1,6 +1,6 @@
 """Required semantic review coverage derived from the canonical Agent B protocol."""
 
-from .models import ReviewCategory, ReviewCheck
+from ..models import ReviewCategory, ReviewCheck
 
 
 COMMON = (

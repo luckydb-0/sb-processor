@@ -7,18 +7,18 @@ import shutil
 from pathlib import Path
 from typing import Any, Protocol
 
-from .agent_b_context import AgentBRequest, ReviewArtifacts, load_review_artifacts
-from .agent_b_batch import (BatchReviewRequest, build_batch_request, filter_unsupported_batch_issues,
+from .context import AgentBRequest, ReviewArtifacts, load_review_artifacts
+from .batch import (BatchReviewRequest, build_batch_request, filter_unsupported_batch_issues,
                             objective_batch_patterns, systematic_issue_groups, validate_batch_review)
-from .agent_b_evidence import (bind_issue_references, constrain_corrections,
+from .evidence import (bind_issue_references, constrain_corrections,
                                 evidence_supported_alias_relation, explicit_alias_pages, normalize_promotion_check)
-from .agent_b_validators import validate_change
-from .review_checks import validate_check_coverage
-from .models import (Action, AliasRelation, ChangeReview, GlobalBatchReview, IssueSeverity, ReviewIssue, ReviewedChange,
+from .validators import validate_change
+from .checks import validate_check_coverage
+from ..models import (Action, AliasRelation, ChangeReview, GlobalBatchReview, IssueSeverity, ReviewIssue, ReviewedChange,
                      ReviewResult, ReviewStatus, NoteChange, CheckStatus, ReviewCategory, ReviewCheck, SourceReference)
-from .knowledge.vault import scan_vault
-from .knowledge.registry import normalize
-from .workflows.university_review import UniversityReviewAdapter
+from ..knowledge.vault import scan_vault
+from ..knowledge.registry import normalize
+from ..workflows.university_review import UniversityReviewAdapter
 
 
 class AgentBClient(Protocol):
@@ -115,7 +115,7 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
             raise ValueError(f"Selected vault snapshot differs from Agent A proposal: {change.target_path}")
     metadata = [note.model_dump(include={"path", "filename", "title", "note_type", "aliases", "maps"})
                 for note in existing]
-    from .models import NoteMetadata
+    from ..models import NoteMetadata
     note_metadata = [NoteMetadata.model_validate(item) for item in metadata]
     all_issues: list[ReviewIssue] = []
     reviewed: list[ReviewedChange] = []

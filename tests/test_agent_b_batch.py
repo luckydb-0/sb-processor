@@ -1,10 +1,10 @@
-from sb_processor.agent_b_batch import (systematic_issue_groups, objective_batch_patterns,
+from sb_processor.review.batch import (systematic_issue_groups, objective_batch_patterns,
                                          build_batch_request, filter_unsupported_batch_issues, validate_batch_review,
                                          BatchReviewRequest)
 from sb_processor.models import (Action, CheckStatus, GlobalBatchReview, GlobalReviewIssue, NoteChange,
                                  ProcessingProposal, ReviewCheck, ReviewIssue, ReviewedChange,
                                  ReviewResult, ReviewStatus)
-from sb_processor.review_checks import required_checks
+from sb_processor.review.checks import required_checks
 
 
 def test_identical_ghost_links_group_into_one_human_issue():

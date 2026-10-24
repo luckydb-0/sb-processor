@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from pydantic import Field
 
-from .models import (GlobalBatchReview, GlobalReviewIssue, ProcessingProposal, ReviewCategory,
+from ..models import (GlobalBatchReview, GlobalReviewIssue, ProcessingProposal, ReviewCategory,
                      ReviewIssue, ReviewResult, ReviewStatus, StrictModel)
 
 

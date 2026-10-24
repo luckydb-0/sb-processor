@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sb_processor.agent_a import build_agent_a_request
+from sb_processor.processing.agent_a import build_agent_a_request
 from sb_processor.knowledge.registry import Registry
 from sb_processor.knowledge.retrieval import RetrievalPolicy, retrieve_notes
 from sb_processor.knowledge.vault import scan_vault

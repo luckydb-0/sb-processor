@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sb_processor.agent_a import build_discovery_request, enrich_definition_candidates, select_analysis_candidates
-from sb_processor.llm import OpenAILLMClient
+from sb_processor.processing.agent_a import build_discovery_request, enrich_definition_candidates, select_analysis_candidates
+from sb_processor.processing.llm import OpenAILLMClient
 from sb_processor.models import SourceAnalysis
 
 

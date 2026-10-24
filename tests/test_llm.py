@@ -1,4 +1,4 @@
-from sb_processor.llm import OpenAILLMClient
+from sb_processor.processing.llm import OpenAILLMClient
 from sb_processor.models import LLMProposal
 
 

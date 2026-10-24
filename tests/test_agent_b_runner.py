@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pymupdf
 
-from sb_processor.agent_b import review_staged_run
+from sb_processor.review.runner import review_staged_run
 from sb_processor.models import ReviewCheck, CheckStatus, GlobalBatchReview
-from sb_processor.review_checks import required_checks
+from sb_processor.review.checks import required_checks
 
 def _checks(dot_status=CheckStatus.PASS):
     return [ReviewCheck(category=category, status=dot_status if category.value == "dot_promotion" else CheckStatus.PASS,
@@ -148,7 +148,7 @@ def test_generic_runner_accepts_a_workflow_review_adapter(tmp_path: Path):
             return "BOOK RULES"
 
         def build_request(self, artifacts, change, instructions):
-            from sb_processor.agent_b_context import build_review_request
+            from sb_processor.review.context import build_review_request
             return build_review_request(artifacts, change, instructions)
 
         def visual_images(self, source, request):

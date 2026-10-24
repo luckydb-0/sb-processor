@@ -1,9 +1,9 @@
-from sb_processor.agent_b_context import AgentBRequest, SourcePageEvidence
-from sb_processor.agent_b_evidence import (bind_issue_references, constrain_corrections,
+from sb_processor.review.context import AgentBRequest, SourcePageEvidence
+from sb_processor.review.evidence import (bind_issue_references, constrain_corrections,
                                            evidence_supported_alias_relation, normalize_promotion_check)
 from sb_processor.models import (Action, AliasAssessment, ChangeReview, NoteChange, PromotionAssessment,
                                  ReviewCheck, CheckStatus, ReviewIssue, ReviewStatus)
-from sb_processor.review_checks import required_checks
+from sb_processor.review.checks import required_checks
 
 
 def _request(title: str, source: str, alias: str = "") -> AgentBRequest:

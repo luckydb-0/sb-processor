@@ -10,10 +10,10 @@ from typing import Any
 
 from pydantic import Field
 
-from .documents.extraction import ProcessingCompleteness
-from .models import CandidateConcept, CandidateImportance, CandidateMatch, SourceAnalysis, StrictModel
-from .knowledge.retrieval import CandidateRetrieval, ExcludedNote, RetrievalResult
-from .knowledge.registry import normalize
+from ..documents.extraction import ProcessingCompleteness
+from ..models import CandidateConcept, CandidateImportance, CandidateMatch, SourceAnalysis, StrictModel
+from ..knowledge.retrieval import CandidateRetrieval, ExcludedNote, RetrievalResult
+from ..knowledge.registry import normalize
 
 
 class ExistingNoteContext(StrictModel):

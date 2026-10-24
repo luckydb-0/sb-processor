@@ -5,11 +5,11 @@ import logging
 import os
 from pathlib import Path
 
-from .llm import OpenAILLMClient
-from .agent_b import OpenAIAgentBClient, review_staged_run
+from .processing.llm import OpenAILLMClient
+from .review.runner import OpenAIAgentBClient, review_staged_run
 from .documents.ingestion import ingest_pdf, stage_ingestion
 from .documents.pdf import compare_pdf_extractors
-from .pipeline import process_source
+from .processing.pipeline import process_source
 from .knowledge.registry import Registry
 from .knowledge.vault import scan_vault
 from .workflows.university import UniversityWorkflow

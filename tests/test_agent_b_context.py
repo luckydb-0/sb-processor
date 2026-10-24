@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from sb_processor.agent_b_context import build_review_request, load_review_artifacts
+from sb_processor.review.context import build_review_request, load_review_artifacts
 from sb_processor.models import Action, NoteChange, ProcessingProposal
 
 

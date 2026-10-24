@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from sb_processor.agent_b import review_staged_run
+from sb_processor.review.runner import review_staged_run
 from sb_processor.models import ReviewCheck, CheckStatus, GlobalBatchReview
-from sb_processor.review_checks import required_checks
+from sb_processor.review.checks import required_checks
 
 def _checks():
     return [ReviewCheck(category=category, status=CheckStatus.PASS) for category in required_checks("concept")]

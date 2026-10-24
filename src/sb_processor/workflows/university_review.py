@@ -8,7 +8,7 @@ from importlib.resources import files
 
 import pymupdf
 
-from ..agent_b_context import AgentBRequest, ReviewArtifacts, build_review_request
+from ..review.context import AgentBRequest, ReviewArtifacts, build_review_request
 from ..models import NoteChange
 
 

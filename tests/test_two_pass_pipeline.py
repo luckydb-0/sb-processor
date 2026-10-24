@@ -1,7 +1,7 @@
 import json
 
 from sb_processor.models import Action, CandidateConcept, ConceptRelation, ConceptResolution, DraftChange, LLMProposal, SourceAnalysis
-from sb_processor.pipeline import process_source
+from sb_processor.processing.pipeline import process_source
 from sb_processor.knowledge.semantic import SemanticHit
 
 

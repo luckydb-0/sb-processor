@@ -2,7 +2,7 @@ import json
 import pytest
 
 from sb_processor.models import Action, CandidateConcept, CandidateMap, ConceptRelation, ConceptResolution, DraftChange, LLMProposal, SourceAnalysis
-from sb_processor.pipeline import IncompleteDocumentError, process_source
+from sb_processor.processing.pipeline import IncompleteDocumentError, process_source
 from sb_processor.knowledge.registry import Registry
 from sb_processor.knowledge.vault import scan_vault
 

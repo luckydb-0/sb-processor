@@ -1,5 +1,5 @@
 from sb_processor.models import Action, DraftChange, NoteMetadata
-from sb_processor.staging import audit_wikilinks
+from sb_processor.processing.staging import audit_wikilinks
 
 
 def test_wikilink_audit_classifies_existing_created_and_ghost():

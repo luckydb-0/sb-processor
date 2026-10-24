@@ -6,9 +6,9 @@ import re
 
 import yaml
 
-from .models import Action, IssueSeverity, NoteChange, NoteMetadata, ReviewIssue, SourceReference
-from .knowledge.registry import normalize
-from .staging import audit_wikilinks
+from ..models import Action, IssueSeverity, NoteChange, NoteMetadata, ReviewIssue, SourceReference
+from ..knowledge.registry import normalize
+from ..processing.staging import audit_wikilinks
 
 
 _FRONTMATTER = re.compile(r"\A---\s*\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", re.DOTALL)

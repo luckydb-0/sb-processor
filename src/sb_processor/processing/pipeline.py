@@ -7,13 +7,13 @@ from typing import Any, Protocol
 
 from .llm import LLMClient
 from .agent_a import build_discovery_request, build_resolution_request, enrich_definition_candidates, select_analysis_candidates
-from .documents.extraction import ProcessingCompleteness, CompletenessStatus
-from .models import Action, ConceptRelation, LLMProposal, NoteChange, NoteMetadata, ProcessingProposal, SourceAnalysis
-from .knowledge.registry import Registry, lexical_tokens
-from .knowledge.retrieval import DEFAULT_SEMANTIC_THRESHOLD, RetrievalPolicy, retrieve_candidate, retrieve_notes
-from .knowledge.semantic import DEFAULT_EMBEDDING_MODEL, SemanticIndex
+from ..documents.extraction import ProcessingCompleteness, CompletenessStatus
+from ..models import Action, ConceptRelation, LLMProposal, NoteChange, NoteMetadata, ProcessingProposal, SourceAnalysis
+from ..knowledge.registry import Registry, lexical_tokens
+from ..knowledge.retrieval import DEFAULT_SEMANTIC_THRESHOLD, RetrievalPolicy, retrieve_candidate, retrieve_notes
+from ..knowledge.semantic import DEFAULT_EMBEDDING_MODEL, SemanticIndex
 from .staging import audit_wikilinks, stage_proposal
-from .knowledge.vault import scan_vault
+from ..knowledge.vault import scan_vault
 
 log = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ def process_source(*, vault_path: Path, source_path: Path, staging_path: Path, d
         course_result.loaded_bodies = {path: body for path, body in course_result.loaded_bodies.items()
                                        if any(c.path == path for c in course_result.candidates)}
         if course_result.candidates:
-            from .knowledge.retrieval import CandidateRetrieval
+            from ..knowledge.retrieval import CandidateRetrieval
             retrievals.append(CandidateRetrieval(**vars(course_result), candidate_name="course context"))
     request, diagnostics = build_resolution_request(workflow.name, source, workflow_context, selected_analysis, retrievals)
     context = request.model_dump(mode="json")

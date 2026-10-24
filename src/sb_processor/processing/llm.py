@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any, Protocol
 
-from .models import LLMProposal, SourceAnalysis
+from ..models import LLMProposal, SourceAnalysis
 
 log = logging.getLogger(__name__)
 

@@ -1,5 +1,5 @@
-from sb_processor.review_checks import required_checks
-from sb_processor.review_checks import validate_check_coverage
+from sb_processor.review.checks import required_checks
+from sb_processor.review.checks import validate_check_coverage
 from pydantic import ValidationError
 import pytest
 

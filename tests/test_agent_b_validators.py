@@ -1,4 +1,4 @@
-from sb_processor.agent_b_validators import validate_change
+from sb_processor.review.validators import validate_change
 from sb_processor.models import Action, NoteChange, NoteMetadata, ReviewStatus
 
 
