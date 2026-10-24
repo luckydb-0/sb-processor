@@ -120,12 +120,7 @@ def reconcile_retry(request: AgentBRequest, response: ChangeReview, retry_reques
         "retry_request_chars": len(retry_request.model_dump_json()),
         "visual_pages_reused": [number for number in {page.page_number for page in request.source_evidence}
                                 if any(item.get("page_number") == number for item in request.visual_evidence)],
-        "blocking_uncertainty": [check.category.value for check in final_checks.values()
-                                  if check.status == CheckStatus.INSUFFICIENT_EVIDENCE
-                                  and check.category in {ReviewCategory.CONCEPT_BOUNDARIES,
-                                                         ReviewCategory.DUPLICATE_CONCEPT,
-                                                         ReviewCategory.DOT_PROMOTION,
-                                                         ReviewCategory.EXISTING_NOTE_INTEGRITY,
-                                                         ReviewCategory.CUMULATIVE_INTEGRITY}
-                                  and retry_result.status == ReviewStatus.REVIEW_REQUIRED],
+        # An unsupported FAIL is reviewer uncertainty, not evidence of a real
+        # conceptual decision. Supported retained/recovered issues still decide status.
+        "blocking_uncertainty": [],
     }

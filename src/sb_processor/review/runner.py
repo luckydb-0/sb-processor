@@ -198,21 +198,8 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         status = response.status if semantic_issues else ReviewStatus.PASS
         if status == ReviewStatus.REVIEW_REQUIRED and not any(
                 issue.issue_type.value in {"concept_boundary", "duplicate_concept", "dot_promotion", "evidence_gap", "existing_note"}
-                for issue in semantic_issues) and not any(
-                    check.status == CheckStatus.INSUFFICIENT_EVIDENCE for check in response.checks):
+                for issue in semantic_issues):
             status = ReviewStatus.FIX if semantic_issues else ReviewStatus.PASS
-        if retry_record and retry_record["blocking_uncertainty"]:
-            status = ReviewStatus.REVIEW_REQUIRED
-            for category in retry_record["blocking_uncertainty"]:
-                issue_type = {"concept_boundaries": "concept_boundary", "duplicate_concept": "duplicate_concept",
-                              "dot_promotion": "dot_promotion", "existing_note_integrity": "existing_note",
-                              "cumulative_integrity": "cumulative_integrity"}[category]
-                issues.append(ReviewIssue(change_path=change.target_path, issue_type=issue_type,
-                    severity=IssueSeverity.MEDIUM,
-                    explanation=f"Supplied evidence does not resolve the {category} decision",
-                    proposed_correction="Decide the conceptual relationship using additional source or existing-note evidence",
-                    evidence_refs=[SourceReference(note_path=change.target_path,
-                        reference="Targeted retry could not resolve this decision")]))
         assessments = {item.alias.casefold(): item for item in response.alias_assessments}
         for alias in request.aliases_to_review:
             assessment = assessments.get(alias.casefold())
@@ -244,7 +231,7 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                                           evidence_refs=assessment.evidence_refs))
         if request.requires_promotion_assessment:
             dot_check = next(check for check in response.checks if check.category == ReviewCategory.DOT_PROMOTION)
-            if dot_check.status in {CheckStatus.FAIL, CheckStatus.INSUFFICIENT_EVIDENCE}:
+            if dot_check.status == CheckStatus.FAIL:
                 status = ReviewStatus.REVIEW_REQUIRED
                 if not any(issue.issue_type.value == "dot_promotion" for issue in issues):
                     issues.append(ReviewIssue(change_path=change.target_path,

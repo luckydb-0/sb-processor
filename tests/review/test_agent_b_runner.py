@@ -351,7 +351,7 @@ def test_retry_insufficient_source_evidence_does_not_force_human_decision(tmp_pa
     assert "Review evidence gaps" not in (run / "SUMMARY.md").read_text()
 
 
-def test_retry_insufficient_boundary_evidence_preserves_real_decision(tmp_path: Path):
+def test_retry_insufficient_boundary_without_supported_issue_does_not_escalate(tmp_path: Path):
     run, vault = _run(tmp_path)
 
     class Reviewer(_ReviewBatchMixin):
@@ -366,8 +366,47 @@ def test_retry_insufficient_boundary_evidence_preserves_real_decision(tmp_path: 
                     "issues": [], "status": "REVIEW_REQUIRED"}
 
     result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert not result.issues
+
+
+def test_genuine_supported_boundary_decision_survives_unrelated_retry(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "claim_strength").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[ReviewIssue(
+                change_path="Dots/A.md", issue_type="concept_boundary", severity="medium",
+                explanation="Two supplied definitions may refer to different concepts",
+                proposed_correction="Choose merge or separation", source_pages=[1])])
+
+        def review_failed_checks(self, request, visual_images):
+            return {"checks": [{"category": "claim_strength", "status": "INSUFFICIENT_EVIDENCE"}],
+                    "issues": [], "status": "PASS"}
+
+    result = review_staged_run(run, vault, Reviewer())
     assert result.reviewed_changes[0].status == ReviewStatus.REVIEW_REQUIRED
     assert any(issue.issue_type.value == "concept_boundary" for issue in result.issues)
+
+
+def test_retried_dot_promotion_uncertainty_without_issue_is_not_human_decision(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "dot_promotion").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            return {"checks": [{"category": "dot_promotion", "status": "INSUFFICIENT_EVIDENCE"}],
+                    "issues": [], "status": "REVIEW_REQUIRED"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert not result.issues
 
 
 def test_supported_first_pass_fail_does_not_retry(tmp_path: Path):
