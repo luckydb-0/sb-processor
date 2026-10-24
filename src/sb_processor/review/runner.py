@@ -11,7 +11,8 @@ from .context import AgentBRequest, ReviewArtifacts, load_review_artifacts
 from .batch import (BatchReviewRequest, build_batch_request, filter_unsupported_batch_issues,
                             objective_batch_patterns, systematic_issue_groups, validate_batch_review)
 from .evidence import (bind_issue_references, constrain_corrections,
-                                evidence_supported_alias_relation, explicit_alias_pages, normalize_promotion_check)
+                                alias_has_existing_usage, evidence_supported_alias_relation,
+                                explicit_alias_pages, normalize_promotion_check)
 from .validators import validate_change
 from .checks import validate_check_coverage
 from .retry import (RetryPolicy, TargetedRetryRequest, TargetedRetryResult, issue_category, make_retry_request,
@@ -216,15 +217,21 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         assessments = {item.alias.casefold(): item for item in response.alias_assessments}
         for alias in request.aliases_to_review:
             assessment = assessments.get(alias.casefold())
+            preexisting = alias_has_existing_usage(request, alias)
             if assessment is None:
                 if ("".join(normalize(alias).split()) == "".join(normalize(change.title).split())
                         or explicit_alias_pages(request, alias)):
                     continue
-                status = ReviewStatus.REVIEW_REQUIRED
-                issues.append(ReviewIssue(change_path=change.target_path, issue_type="evidence_gap",
-                                          severity=IssueSeverity.HIGH,
-                                          explanation=f"Agent B did not assess alias: {alias}",
-                                          proposed_correction="Review whether this alias is identity equivalent"))
+                alias_status = ReviewStatus.REVIEW_REQUIRED if preexisting else ReviewStatus.FIX
+                status = _status([status, alias_status])
+                issues.append(ReviewIssue(change_path=change.target_path, issue_type="alias",
+                                          severity=IssueSeverity.MEDIUM,
+                                          explanation=(f"Existing alias '{alias}' needs an evidence-based identity decision"
+                                              if preexisting else f"New alias '{alias}' has no supplied identity evidence"),
+                                          proposed_correction=("Review conflicting existing naming evidence"
+                                              if preexisting else f"Remove alias '{alias}' from frontmatter"),
+                                          evidence_refs=[SourceReference(note_path=change.target_path,
+                                              reference="Proposed alias in final note frontmatter")]))
             else:
                 alias_status = (ReviewStatus.PASS if assessment.relation == AliasRelation.IDENTITY_EQUIVALENT
                                 else ReviewStatus.REVIEW_REQUIRED if assessment.relation == AliasRelation.AMBIGUOUS
@@ -232,7 +239,7 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                 if alias_status == ReviewStatus.PASS:
                     continue
                 if not assessment.evidence_refs:
-                    alias_status = ReviewStatus.REVIEW_REQUIRED
+                    alias_status = ReviewStatus.REVIEW_REQUIRED if preexisting else ReviewStatus.FIX
                 status = _status([status, alias_status])
                 issues.append(ReviewIssue(change_path=change.target_path, issue_type="alias",
                                           severity=IssueSeverity.MEDIUM,
@@ -297,6 +304,10 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                     issue.issue_type.value == "alias" for issue in issues):
                 check.status = CheckStatus.PASS
                 check.explanation = "Proposed aliases have direct identity or orthographic evidence"
+            elif check.category == ReviewCategory.ALIASES and any(
+                    issue.issue_type.value == "alias" for issue in issues):
+                check.status = CheckStatus.FAIL
+                check.explanation = "At least one proposed alias lacks supported identity equivalence"
         covered = {issue_category(issue) for issue in issues}
         orphan_failures = [check for check in checks if check.status == CheckStatus.FAIL
                            and check.category not in covered]

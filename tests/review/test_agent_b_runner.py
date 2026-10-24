@@ -170,7 +170,7 @@ def test_generic_runner_accepts_a_workflow_review_adapter(tmp_path: Path):
     assert result.overall_status == ReviewStatus.PASS
 
 
-def test_uncited_subtype_claim_requires_review(tmp_path: Path):
+def test_uncited_new_alias_is_removed_conservatively(tmp_path: Path):
     run, vault = _run(tmp_path)
     proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
     proposal.note_changes[0].content = "---\ntype: concept\naliases: [K-Fold A]\n---\n# A"
@@ -185,8 +185,34 @@ def test_uncited_subtype_claim_requires_review(tmp_path: Path):
                     explanation="Independent", proposed_correction=""))
 
     result = review_staged_run(run, vault, Reviewer())
-    assert result.overall_status == ReviewStatus.REVIEW_REQUIRED
-    assert "lacks cited evidence" in result.issues[0].explanation
+    assert result.overall_status == ReviewStatus.FIX
+    assert result.issues[0].proposed_correction == "Remove alias 'K-Fold A' from frontmatter"
+
+
+def test_unsupported_new_abbreviation_is_fix_not_human_decision(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
+    change = proposal.note_changes[0]
+    change.title = "Data-Driven Decision Making"
+    change.target_path = "Dots/Data-Driven Decision Making.md"
+    change.content = "---\ntype: concept\naliases: [DDD]\n---\n# Data-Driven Decision Making\nA is supported."
+    (run / "proposal.json").write_text(proposal.model_dump_json())
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            return ChangeReview(checks=_checks(), status=ReviewStatus.REVIEW_REQUIRED, issues=[],
+                alias_assessments=[AliasAssessment(alias="DDD", relation="AMBIGUOUS",
+                    status=ReviewStatus.REVIEW_REQUIRED, explanation="No supplied identity evidence",
+                    proposed_correction="Ask the user")],
+                promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
+                    explanation="Independent", proposed_correction="", foundational_identity=True))
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.FIX
+    assert result.issues[0].issue_type.value == "alias"
+    assert result.issues[0].proposed_correction == "Remove alias 'DDD' from frontmatter"
+    assert "DDD" not in (run / "SUMMARY.md").read_text().split("## Needs human decision", 1)[1].split(
+        "## Systematic issues", 1)[0]
 
 
 def test_review_does_not_overwrite_existing_agent_b_artifacts(tmp_path: Path):
