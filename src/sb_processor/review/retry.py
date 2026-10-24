@@ -155,13 +155,15 @@ def reconcile_retry(request: AgentBRequest, response: ChangeReview, retry_reques
                     retry_result: TargetedRetryResult) -> dict:
     expected = set(retry_request.categories)
     actual = [check.category for check in retry_result.checks]
-    if len(actual) != len(set(actual)) or set(actual) != expected:
-        raise ValueError("Targeted Agent B retry returned missing, extra, or duplicate check categories")
+    if len(actual) != len(set(actual)) or not expected <= set(actual):
+        raise ValueError("Targeted Agent B retry returned missing or duplicate required check categories")
+    retry_checks = [check for check in retry_result.checks if check.category in expected]
+    retry_issues = [issue for issue in retry_result.issues if issue_category(issue) in expected]
     retained = [issue for issue in response.issues if issue_category(issue) not in expected]
     recovered: list[ReviewIssue] = []
     final_checks: dict[ReviewCategory, ReviewCheck] = {}
-    for check in retry_result.checks:
-        matching = [issue for issue in retry_result.issues if issue_category(issue) == check.category
+    for check in retry_checks:
+        matching = [issue for issue in retry_issues if issue_category(issue) == check.category
                     and valid_issue_evidence(issue, request)]
         if check.status == CheckStatus.FAIL and not matching:
             check = check.model_copy(update={"status": CheckStatus.INSUFFICIENT_EVIDENCE,

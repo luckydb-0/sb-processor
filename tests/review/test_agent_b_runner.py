@@ -589,3 +589,29 @@ def test_zero_retry_budget_terminally_settles_material_failure(tmp_path: Path):
     diagnostics = json.loads((run / "agent_b" / "diagnostics.json").read_text())
     assert diagnostics["retry_count"] == 0
     assert diagnostics["unsupported_failures_skipped"] == 1
+
+
+def test_targeted_retry_ignores_extra_checklist_categories(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "source_fidelity").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            return {"checks": [
+                        {"category": "source_fidelity", "status": "PASS"},
+                        {"category": "naming", "status": "FAIL", "explanation": "Unrequested opinion"},
+                    ],
+                    "issues": [{"change_path": "Dots/A.md", "issue_type": "naming", "severity": "medium",
+                                "explanation": "Unrequested opinion", "proposed_correction": "Rename A",
+                                "source_pages": [1]}],
+                    "status": "FIX"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert result.issues == []
+    assert next(check for check in result.reviewed_changes[0].checks
+                if check.category.value == "naming").status == CheckStatus.PASS
