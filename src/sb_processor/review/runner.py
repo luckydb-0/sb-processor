@@ -14,8 +14,8 @@ from .evidence import (bind_issue_references, constrain_corrections,
                                 evidence_supported_alias_relation, explicit_alias_pages, normalize_promotion_check)
 from .validators import validate_change
 from .checks import validate_check_coverage
-from .retry import (TargetedRetryRequest, TargetedRetryResult, issue_category, make_retry_request,
-                    reconcile_retry, unsupported_failures)
+from .retry import (RetryPolicy, TargetedRetryRequest, TargetedRetryResult, issue_category, make_retry_request,
+                    reconcile_retry, select_retry_categories, settle_unsupported_failures, unsupported_failures)
 from ..models import (Action, AliasRelation, ChangeReview, GlobalBatchReview, IssueSeverity, ReviewIssue, ReviewedChange,
                      ReviewResult, ReviewStatus, NoteChange, CheckStatus, ReviewCategory, ReviewCheck, SourceReference)
 from ..knowledge.vault import scan_vault
@@ -111,7 +111,8 @@ def _safe_correction_path(root: Path, target: str) -> Path | None:
 
 def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                       *, instructions_path: Path | None = None,
-                      adapter: ReviewAdapter | None = None) -> ReviewResult:
+                      adapter: ReviewAdapter | None = None,
+                      retry_policy: RetryPolicy | None = None) -> ReviewResult:
     run = Path(run).resolve(strict=True)
     vault = Path(vault).resolve(strict=True)
     if run.is_relative_to(vault):
@@ -143,6 +144,8 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
     retry_requests: list[TargetedRetryRequest] = []
     retry_results: list[TargetedRetryResult] = []
     retry_records: list[dict[str, Any]] = []
+    unsupported_records: list[dict[str, Any]] = []
+    retry_policy = retry_policy or RetryPolicy()
     visual_inspected: set[int] = set()
     for change in artifacts.proposal.note_changes:
         request = adapter.build_request(artifacts, change, instructions)
@@ -161,9 +164,19 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         evidence_supported_alias_relation(request, response)
         normalize_promotion_check(response)
         missing_support = unsupported_failures(request, response)
-        retry_record = None
+        retry_categories = select_retry_categories(missing_support, retry_policy)
+        skipped_categories = [category for category in missing_support if category not in retry_categories]
+        settle_unsupported_failures(response, skipped_categories)
         if missing_support:
-            retry_request = make_retry_request(request, response, missing_support)
+            unsupported_records.append({
+                "change_path": change.target_path,
+                "initial": [category.value for category in missing_support],
+                "retried": [category.value for category in retry_categories],
+                "skipped": [category.value for category in skipped_categories],
+            })
+        retry_record = None
+        if retry_categories:
+            retry_request = make_retry_request(request, response, retry_categories)
             retry_result = TargetedRetryResult.model_validate(llm.review_failed_checks(retry_request, images))
             retry_record = reconcile_retry(request, response, retry_request, retry_result)
             retry_requests.append(retry_request)
@@ -326,14 +339,16 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
     canonical_path = vault / "+ Inbox" / "Agent B - University Processing Review Instructions.md"
     canonical_chars = len(canonical_path.read_text(encoding="utf-8")) if canonical_path.is_file() else None
     _stage_review(run, artifacts.proposal.model_dump(mode="json"), requests, result, visual_inspected,
-                  batch_request, canonical_chars, retry_requests, retry_results, retry_records)
+                  batch_request, canonical_chars, retry_requests, retry_results, retry_records,
+                  unsupported_records, retry_policy)
     return result
 
 
 def _stage_review(run: Path, proposal: dict[str, Any], requests: list[AgentBRequest],
                   result: ReviewResult, visual_inspected: set[int], batch_request: BatchReviewRequest,
                   canonical_chars: int | None, retry_requests: list[TargetedRetryRequest],
-                  retry_results: list[TargetedRetryResult], retry_records: list[dict[str, Any]]) -> None:
+                  retry_results: list[TargetedRetryResult], retry_records: list[dict[str, Any]],
+                  unsupported_records: list[dict[str, Any]], retry_policy: RetryPolicy) -> None:
     output = run / "agent_b"
     output.mkdir(exist_ok=True)
     (output / "review.json").write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -381,6 +396,12 @@ def _stage_review(run: Path, proposal: dict[str, Any], requests: list[AgentBRequ
         "retry_checks_changed_to_pass": sum(item["changed_to_pass"] for item in retry_records),
         "retry_checks_changed_to_insufficient_evidence": sum(item["changed_to_insufficient_evidence"] for item in retry_records),
         "retry_final_escalations": sum(item["final_escalation"] for item in retry_records),
+        "initial_unsupported_fail_count": sum(len(item["initial"]) for item in unsupported_records),
+        "unsupported_failures_skipped": sum(len(item["skipped"]) for item in unsupported_records),
+        "retry_policy": {
+            "max_targeted_retries_per_change": retry_policy.max_targeted_retries_per_change,
+            "max_checks_per_retry": retry_policy.max_checks_per_retry,
+        },
         "retry_request_chars": sum(item["retry_request_chars"] for item in retry_records),
         "retry_estimated_tokens": (sum(item["retry_request_chars"] for item in retry_records) + 3) // 4,
         "total_request_chars": sum(request_sizes) + len(batch_request.model_dump_json()) +

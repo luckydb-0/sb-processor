@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from pydantic import Field
 
@@ -26,6 +27,55 @@ ISSUE_CATEGORY = {
     "lecture": ReviewCategory.LECTURE_STRUCTURE,
     "verbosity": ReviewCategory.SYNTHESIS,
 }
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    max_targeted_retries_per_change: int = 1
+    max_checks_per_retry: int = 4
+
+    def __post_init__(self) -> None:
+        if self.max_targeted_retries_per_change not in (0, 1):
+            raise ValueError("Agent B supports zero or one targeted retry per change")
+        if self.max_checks_per_retry < 1:
+            raise ValueError("max_checks_per_retry must be positive")
+
+
+MATERIAL_RETRY_PRIORITY = (
+    ReviewCategory.SOURCE_FIDELITY,
+    ReviewCategory.CLAIM_STRENGTH,
+    ReviewCategory.SOURCE_SPECIFIC_RESULTS,
+    ReviewCategory.EXISTING_NOTE_INTEGRITY,
+    ReviewCategory.CUMULATIVE_INTEGRITY,
+    ReviewCategory.DUPLICATE_CONCEPT,
+    ReviewCategory.CONCEPT_BOUNDARIES,
+    ReviewCategory.DOT_PROMOTION,
+    ReviewCategory.ALIASES,
+)
+
+
+def select_retry_categories(categories: list[ReviewCategory], policy: RetryPolicy) -> list[ReviewCategory]:
+    if policy.max_targeted_retries_per_change == 0:
+        return []
+    unsupported = set(categories)
+    return [category for category in MATERIAL_RETRY_PRIORITY if category in unsupported][
+        :policy.max_checks_per_retry]
+
+
+def settle_unsupported_failures(response: ChangeReview, categories: list[ReviewCategory]) -> None:
+    """Make unproven failures terminal without turning reviewer uncertainty into an issue."""
+    selected = set(categories)
+    if not selected:
+        return
+    response.checks = [
+        check.model_copy(update={"status": CheckStatus.INSUFFICIENT_EVIDENCE,
+                                 "explanation": "Initial FAIL lacked positive supplied evidence"})
+        if check.category in selected and check.status == CheckStatus.FAIL else check
+        for check in response.checks
+    ]
+    response.issues = [issue for issue in response.issues if issue_category(issue) not in selected]
+    if not response.issues:
+        response.status = ReviewStatus.PASS
 
 
 def issue_category(issue: ReviewIssue) -> ReviewCategory | None:

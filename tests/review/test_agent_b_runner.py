@@ -4,6 +4,7 @@ from pathlib import Path
 import pymupdf
 
 from sb_processor.review.runner import review_staged_run
+from sb_processor.review.retry import RetryPolicy
 from sb_processor.models import ReviewCheck, CheckStatus, GlobalBatchReview
 from sb_processor.review.checks import required_checks
 
@@ -468,3 +469,92 @@ def test_nonblocking_insufficient_retry_keeps_objective_fix_auto_fixable(tmp_pat
     result = review_staged_run(run, vault, Reviewer())
     assert result.reviewed_changes[0].status == ReviewStatus.FIX
     assert {issue.issue_type.value for issue in result.issues} == {"provenance"}
+
+
+def test_low_impact_unsupported_fail_becomes_terminal_insufficient_without_retry(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "naming").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            raise AssertionError("Low-impact unsupported failure must not consume a retry")
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert next(check for check in result.reviewed_changes[0].checks
+                if check.category.value == "naming").status == CheckStatus.INSUFFICIENT_EVIDENCE
+    diagnostics = json.loads((run / "agent_b" / "diagnostics.json").read_text())
+    assert diagnostics["initial_unsupported_fail_count"] == 1
+    assert diagnostics["retry_count"] == 0
+    assert diagnostics["unsupported_failures_skipped"] == 1
+
+
+def test_material_boundary_failure_is_selected_for_targeted_retry(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "concept_boundaries").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            assert [category.value for category in request.categories] == ["concept_boundaries"]
+            return {"checks": [{"category": "concept_boundaries", "status": "PASS"}],
+                    "issues": [], "status": "PASS"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert json.loads((run / "agent_b" / "diagnostics.json").read_text())["retry_count"] == 1
+
+
+def test_retry_policy_caps_calls_and_checks_per_change(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            for category in ("source_fidelity", "claim_strength", "concept_boundaries"):
+                next(check for check in checks if check.category.value == category).status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            assert [category.value for category in request.categories] == ["source_fidelity"]
+            return {"checks": [{"category": "source_fidelity", "status": "INSUFFICIENT_EVIDENCE"}],
+                    "issues": [], "status": "PASS"}
+
+    result = review_staged_run(run, vault, Reviewer(), retry_policy=RetryPolicy(
+        max_targeted_retries_per_change=1, max_checks_per_retry=1))
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    statuses = {check.category.value: check.status for check in result.reviewed_changes[0].checks}
+    assert statuses["source_fidelity"] == CheckStatus.INSUFFICIENT_EVIDENCE
+    assert statuses["claim_strength"] == CheckStatus.INSUFFICIENT_EVIDENCE
+    assert statuses["concept_boundaries"] == CheckStatus.INSUFFICIENT_EVIDENCE
+    diagnostics = json.loads((run / "agent_b" / "diagnostics.json").read_text())
+    assert diagnostics["retry_count"] == 1
+    assert diagnostics["retry_checks_retried"] == 1
+    assert diagnostics["unsupported_failures_skipped"] == 2
+
+
+def test_zero_retry_budget_terminally_settles_material_failure(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "source_fidelity").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            raise AssertionError("Zero retry budget must prevent a second call")
+
+    result = review_staged_run(run, vault, Reviewer(), retry_policy=RetryPolicy(
+        max_targeted_retries_per_change=0, max_checks_per_retry=4))
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    diagnostics = json.loads((run / "agent_b" / "diagnostics.json").read_text())
+    assert diagnostics["retry_count"] == 0
+    assert diagnostics["unsupported_failures_skipped"] == 1
