@@ -3,6 +3,8 @@ from pathlib import Path
 
 from sb_processor.review.context import build_review_request, load_review_artifacts
 from sb_processor.models import Action, NoteChange, ProcessingProposal
+from sb_processor.models import ReviewIssue, SourceReference
+from sb_processor.review.retry import valid_issue_evidence
 
 
 def test_review_request_selects_provenance_pages_and_affected_notes(tmp_path: Path):
@@ -55,6 +57,17 @@ def test_dataset_update_serializes_proposed_final_content_separately_from_old_no
     assert "content" not in payload["proposal_change"]
     assert payload["affected_existing_notes"][0]["existing_content"] == old
     assert "body" not in payload["affected_existing_notes"][0]
+
+    request = build_review_request(load_review_artifacts(tmp_path), change, "RULES")
+    vague_loss = ReviewIssue(change_path="Dots/Dataset.md", issue_type="existing_note",
+        severity="medium", explanation="The old note lacks details added by the update",
+        proposed_correction="Restore the old note", evidence_refs=[SourceReference(
+            note_path="Dots/Dataset.md", reference="Existing dataset definition")])
+    assert not valid_issue_evidence(vague_loss, request)
+    supported_loss = vague_loss.model_copy(update={"evidence_refs": [SourceReference(
+        note_path="Dots/Dataset.md", reference='Old note says "A dataset is a table of examples."')],
+        "explanation": "This old statement is missing from the proposed final note"})
+    assert valid_issue_evidence(supported_loss, request)
 
 
 def test_renamed_concept_uses_overlapping_discovery_provenance(tmp_path: Path):

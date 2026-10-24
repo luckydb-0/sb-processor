@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 from pydantic import Field
 
 from .context import AgentBRequest
+from ..knowledge.registry import normalize
 from ..models import (ChangeReview, CheckStatus, ReviewCategory, ReviewCheck,
                       ReviewIssue, ReviewStatus, StrictModel)
 
@@ -44,6 +47,21 @@ def valid_issue_evidence(issue: ReviewIssue, request: AgentBRequest) -> bool:
     if issue_category(issue) in {ReviewCategory.SOURCE_FIDELITY, ReviewCategory.CLAIM_STRENGTH,
                                  ReviewCategory.SOURCE_SPECIFIC_RESULTS}:
         return bool(cited_pages)
+    if issue_category(issue) in {ReviewCategory.EXISTING_NOTE_INTEGRITY,
+                                 ReviewCategory.CUMULATIVE_INTEGRITY}:
+        old = next((note for note in request.affected_existing_notes
+                    if note.review_role == "pre_update_target" and note.path == issue.change_path), None)
+        if old is None:
+            return False
+        proposed = normalize(request.proposal_change.proposed_final_content)
+        for ref in issue.evidence_refs:
+            if ref.note_path != old.path:
+                continue
+            for quote in re.findall(r'["“]([^"”]{12,})["”]', ref.reference):
+                normalized = normalize(quote)
+                if normalized in normalize(old.existing_content) and normalized not in proposed:
+                    return True
+        return False
     return bool(cited_pages or any(ref.note_path in note_paths for ref in issue.evidence_refs))
 
 
