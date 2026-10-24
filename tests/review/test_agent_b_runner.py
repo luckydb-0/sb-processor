@@ -20,7 +20,7 @@ class _ReviewBatchMixin:
 
 from sb_processor.models import (Action, AliasAssessment, ChangeReview, NoteChange, ProcessingProposal,
                                  PromotionAssessment,
-                                 ReviewIssue, ReviewStatus)
+                                 ReviewIssue, ReviewStatus, SourceReference)
 
 
 def _run(tmp_path: Path, *, visual: bool = False) -> tuple[Path, Path]:
@@ -203,7 +203,9 @@ def test_unsupported_new_abbreviation_is_fix_not_human_decision(tmp_path: Path):
             return ChangeReview(checks=_checks(), status=ReviewStatus.REVIEW_REQUIRED, issues=[],
                 alias_assessments=[AliasAssessment(alias="DDD", relation="AMBIGUOUS",
                     status=ReviewStatus.REVIEW_REQUIRED, explanation="No supplied identity evidence",
-                    proposed_correction="Ask the user")],
+                    proposed_correction="Ask the user", evidence_refs=[SourceReference(
+                        note_path="Dots/Data-Driven Decision Making.md",
+                        reference="DDD appears only in the proposed alias frontmatter")])],
                 promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
                     explanation="Independent", proposed_correction="", foundational_identity=True))
 
@@ -213,6 +215,21 @@ def test_unsupported_new_abbreviation_is_fix_not_human_decision(tmp_path: Path):
     assert result.issues[0].proposed_correction == "Remove alias 'DDD' from frontmatter"
     assert "DDD" not in (run / "SUMMARY.md").read_text().split("## Needs human decision", 1)[1].split(
         "## Systematic issues", 1)[0]
+
+
+def test_positive_issue_for_passing_check_is_not_actionable(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            return ChangeReview(checks=_checks(), status=ReviewStatus.FIX, issues=[ReviewIssue(
+                change_path="Dots/A.md", issue_type="duplicate_concept", severity="low",
+                explanation="No duplicate concept problem is evidenced",
+                proposed_correction="No change needed", source_pages=[1])])
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert result.issues == []
 
 
 def test_review_does_not_overwrite_existing_agent_b_artifacts(tmp_path: Path):
