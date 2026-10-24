@@ -471,13 +471,17 @@ def test_deterministic_provenance_fail_does_not_retry_semantics(tmp_path: Path):
             assert any(item["issue_type"] == "provenance" for item in request.deterministic_findings)
             checks = _checks()
             next(check for check in checks if check.category.value == "provenance").status = CheckStatus.FAIL
-            return ChangeReview(checks=checks, status=ReviewStatus.FIX, issues=[])
+            return ChangeReview(checks=checks, status=ReviewStatus.FIX, issues=[ReviewIssue(
+                change_path="Dots/A.md", issue_type="provenance", severity="medium",
+                explanation="Raw source path is duplicated in the Concept note",
+                proposed_correction="Remove the raw source path", source_pages=[1])])
 
         def review_failed_checks(self, request, visual_images):
             raise AssertionError("Objective provenance is already validated")
 
     result = review_staged_run(run, vault, Reviewer())
     assert result.reviewed_changes[0].status == ReviewStatus.FIX
+    assert sum(issue.issue_type.value == "provenance" for issue in result.issues) == 1
     assert json.loads((run / "agent_b" / "diagnostics.json").read_text())["retry_count"] == 0
 
 
@@ -615,3 +619,43 @@ def test_targeted_retry_ignores_extra_checklist_categories(tmp_path: Path):
     assert result.issues == []
     assert next(check for check in result.reviewed_changes[0].checks
                 if check.category.value == "naming").status == CheckStatus.PASS
+
+
+def test_agent_a_human_decision_reason_survives_objective_fix_issue(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
+    proposal.note_changes[0].action = Action.REVIEW_REQUIRED
+    proposal.note_changes[0].reason = "Decide whether Classification and Predictive Classification should merge"
+    (run / "proposal.json").write_text(proposal.model_dump_json())
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            return ChangeReview(checks=_checks(), status=ReviewStatus.FIX, issues=[ReviewIssue(
+                change_path="Dots/A.md", issue_type="provenance", severity="medium",
+                explanation="Objective provenance format issue", proposed_correction="Remove metadata",
+                source_pages=[1])])
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.REVIEW_REQUIRED
+    assert {issue.issue_type.value for issue in result.issues} == {"provenance", "existing_note"}
+    assert any("Classification and Predictive Classification" in issue.explanation for issue in result.issues)
+
+
+def test_alias_fail_is_not_actionable_when_no_alias_is_proposed(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            assert request.aliases_to_review == []
+            checks = _checks()
+            next(check for check in checks if check.category.value == "aliases").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[],
+                alias_assessments=[AliasAssessment(alias="Unproposed", relation="AMBIGUOUS",
+                    status=ReviewStatus.REVIEW_REQUIRED, explanation="Not in final content",
+                    proposed_correction="Review")])
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert result.issues == []
+    assert next(check for check in result.reviewed_changes[0].checks
+                if check.category.value == "aliases").status == CheckStatus.NOT_APPLICABLE

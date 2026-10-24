@@ -134,6 +134,17 @@ def _status(statuses: list[ReviewStatus]) -> ReviewStatus:
     return ReviewStatus.PASS
 
 
+def _duplicates_deterministic_provenance(issue: ReviewIssue, deterministic: list[ReviewIssue]) -> bool:
+    if issue.issue_type.value != "provenance" or not any(
+            item.issue_type.value == "provenance"
+            and "direct PDF metadata" in item.explanation for item in deterministic):
+        return False
+    wording = f"{issue.explanation} {issue.proposed_correction}".casefold()
+    return any(marker in wording for marker in (
+        "pdf metadata", "direct pdf", "raw source path", "source_file", "location metadata",
+    ))
+
+
 def _safe_correction_path(root: Path, target: str) -> Path | None:
     output = root / target
     if not target.endswith(".md") or "\\" in target or output.resolve().is_relative_to(root.resolve()) is False:
@@ -192,6 +203,15 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         visual_inspected.update(number for number, _ in images)
         response = ChangeReview.model_validate(llm.review_change(request, images))
         validate_check_coverage(response.checks, change.note_type)
+        if not request.aliases_to_review:
+            response.alias_assessments = []
+            response.issues = [issue for issue in response.issues if issue.issue_type.value != "alias"]
+            alias_check = next((check for check in response.checks
+                                if check.category == ReviewCategory.ALIASES), None)
+            if alias_check is not None:
+                alias_check.status = CheckStatus.NOT_APPLICABLE
+                alias_check.explanation = "No alias is proposed in the final content"
+                alias_check.evidence_refs = []
         constrain_corrections(request, response)
         evidence_supported_alias_relation(request, response)
         normalize_promotion_check(response)
@@ -236,9 +256,7 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                                                                        for target in deterministic_links))
                            and not (issue.issue_type == "alias" and response.alias_assessments)
                            and not (issue.issue_type == "dot_promotion" and response.promotion_assessment)
-                           and not (issue.issue_type.value == "provenance" and "PDF metadata" in issue.explanation
-                                    and any(d.issue_type.value == "provenance" and "PDF metadata" in d.explanation
-                                            for d in deterministic))]
+                           and not _duplicates_deterministic_provenance(issue, deterministic)]
         issues = [*deterministic, *semantic_issues]
         status = response.status if semantic_issues else ReviewStatus.PASS
         if status == ReviewStatus.REVIEW_REQUIRED and not any(
@@ -298,11 +316,12 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
             status = ReviewStatus.FIX
         if change.action == Action.REVIEW_REQUIRED:
             status = ReviewStatus.REVIEW_REQUIRED
-            if not issues:
-                issues.append(ReviewIssue(change_path=change.target_path, issue_type="existing_note",
-                                          severity=IssueSeverity.MEDIUM,
-                                          explanation="Agent A marked this change for human review",
-                                          proposed_correction="Resolve the original proposal concern before applying"))
+            issues.append(ReviewIssue(change_path=change.target_path, issue_type="existing_note",
+                                      severity=IssueSeverity.MEDIUM,
+                                      explanation=f"Agent A requested a human decision: {change.reason}",
+                                      proposed_correction="Resolve the original proposal concern before applying",
+                                      evidence_refs=[SourceReference(note_path=change.target_path,
+                                          reference="Agent A proposal reason")]))
         missing_visuals = {int(item["page_number"]) for item in request.visual_evidence} - {n for n, _ in images}
         if missing_visuals:
             status = ReviewStatus.REVIEW_REQUIRED
