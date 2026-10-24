@@ -272,9 +272,10 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
         for alias in request.aliases_to_review:
             assessment = assessments.get(alias.casefold())
             preexisting = alias_has_existing_usage(request, alias)
+            orthographic = ("".join(normalize(alias).split())
+                            == "".join(normalize(change.title).split()))
             if assessment is None:
-                if ("".join(normalize(alias).split()) == "".join(normalize(change.title).split())
-                        or explicit_alias_pages(request, alias)):
+                if orthographic or explicit_alias_pages(request, alias):
                     continue
                 alias_status = ReviewStatus.REVIEW_REQUIRED if preexisting else ReviewStatus.FIX
                 status = _status([status, alias_status])
@@ -287,7 +288,8 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
                                           evidence_refs=[SourceReference(note_path=change.target_path,
                                               reference="Proposed alias in final note frontmatter")]))
             else:
-                alias_status = (ReviewStatus.PASS if assessment.relation == AliasRelation.IDENTITY_EQUIVALENT
+                alias_status = (ReviewStatus.PASS
+                                if assessment.relation == AliasRelation.IDENTITY_EQUIVALENT or orthographic
                                 else ReviewStatus.REVIEW_REQUIRED
                                 if preexisting and assessment.relation == AliasRelation.AMBIGUOUS
                                 else ReviewStatus.FIX)

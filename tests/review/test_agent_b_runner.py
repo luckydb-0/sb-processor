@@ -275,6 +275,10 @@ def test_orthographic_alias_does_not_require_invented_distinction(tmp_path: Path
     class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[],
+                alias_assessments=[AliasAssessment(alias="Data Set", relation="VARIANT",
+                    status=ReviewStatus.PASS, explanation="Exact-title spelling variant",
+                    proposed_correction="", evidence_refs=[SourceReference(
+                        note_path="Dots/Dataset.md", reference="Exact-title spelling variant")])],
                 promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
                     explanation="Independent", proposed_correction="", foundational_identity=True))
 
