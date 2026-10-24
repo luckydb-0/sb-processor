@@ -367,12 +367,14 @@ def test_targeted_retry_recovers_supported_source_issue(tmp_path: Path):
                                 "explanation": "The proposed claim exceeds page 1"}],
                     "issues": [{"change_path": "Dots/A.md", "issue_type": "source_fidelity",
                                 "severity": "medium", "explanation": "Proposed claim exceeds the source",
-                                "proposed_correction": "Remove the unsupported wording", "source_pages": [1]}],
+                                "proposed_correction": "Remove the unsupported wording", "source_pages": [1],
+                                "corrected_content": "A speculative replacement"}],
                     "status": "FIX"}
 
     result = review_staged_run(run, vault, Reviewer())
     assert result.reviewed_changes[0].status == ReviewStatus.FIX
     assert any(issue.issue_type.value == "source_fidelity" for issue in result.issues)
+    assert all(issue.corrected_content is None for issue in result.issues)
     diagnostics = json.loads((run / "agent_b" / "diagnostics.json").read_text())
     assert diagnostics["retry_issues_recovered"] == 1
 

@@ -169,7 +169,7 @@ def reconcile_retry(request: AgentBRequest, response: ChangeReview, retry_reques
             check = check.model_copy(update={"status": CheckStatus.INSUFFICIENT_EVIDENCE,
                 "explanation": "Retry did not substantiate this failure with supplied evidence"})
         if check.status == CheckStatus.FAIL:
-            recovered.extend(matching)
+            recovered.extend(issue.model_copy(update={"corrected_content": None}) for issue in matching)
         final_checks[check.category] = check
     response.checks = [final_checks.get(check.category, check) for check in response.checks]
     response.issues = [*retained, *recovered]
