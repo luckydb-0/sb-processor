@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -40,12 +41,35 @@ class ReviewAdapter(Protocol):
 
 
 class OpenAIAgentBClient:
-    def __init__(self, model: str, client: Any = None):
+    def __init__(self, model: str, client: Any = None, *, reasoning_effort: str | None = None):
         if client is None:
             from openai import OpenAI
             client = OpenAI()
         self.model = model
         self.client = client
+        self.reasoning_effort = reasoning_effort
+        self._metrics = {"semantic_calls": 0, "retry_calls": 0, "batch_calls": 0,
+                         "input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+        self._runtime_seconds = 0.0
+
+    def _options(self) -> dict[str, Any]:
+        return ({"reasoning": {"effort": self.reasoning_effort}}
+                if self.reasoning_effort is not None else {})
+
+    def _record(self, response: Any, kind: str, elapsed: float) -> None:
+        self._metrics[kind] += 1
+        self._runtime_seconds += elapsed
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        self._metrics["input_tokens"] += int(getattr(usage, "input_tokens", 0) or 0)
+        self._metrics["output_tokens"] += int(getattr(usage, "output_tokens", 0) or 0)
+        details = getattr(usage, "output_tokens_details", None)
+        self._metrics["reasoning_tokens"] += int(getattr(details, "reasoning_tokens", 0) or 0)
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {"model": self.model, "reasoning_effort": self.reasoning_effort, **self._metrics,
+                "runtime_seconds": round(self._runtime_seconds, 3)}
 
     def review_change(self, request: AgentBRequest,
                       visual_images: list[tuple[int, str]]) -> ChangeReview:
@@ -54,6 +78,7 @@ class OpenAIAgentBClient:
         for number, data_url in visual_images:
             content.append({"type": "input_text", "text": f"Original rendered source page {number}:"})
             content.append({"type": "input_image", "image_url": data_url, "detail": "high"})
+        started = time.monotonic()
         response = self.client.responses.parse(
             model=self.model,
             input=[
@@ -62,18 +87,22 @@ class OpenAIAgentBClient:
             ],
             text_format=ChangeReview,
             store=False,
+            **self._options(),
         )
+        self._record(response, "semantic_calls", time.monotonic() - started)
         if response.status != "completed" or response.output_parsed is None:
             raise ValueError(f"Agent B did not return a completed structured review (status={response.status})")
         return ChangeReview.model_validate(response.output_parsed)
 
     def review_batch(self, request: BatchReviewRequest) -> GlobalBatchReview:
+        started = time.monotonic()
         response = self.client.responses.parse(
             model=self.model,
             input=[{"role": "system", "content": "You are independent Agent B performing one concise global review. Use only the supplied batch summaries and cited individual issues. Do not invent source facts, corrections, or unsupported concept distinctions. Return structured cross-note issues only."},
                    {"role": "user", "content": request.model_dump_json()}],
-            text_format=GlobalBatchReview, store=False,
+            text_format=GlobalBatchReview, store=False, **self._options(),
         )
+        self._record(response, "batch_calls", time.monotonic() - started)
         if response.status != "completed" or response.output_parsed is None:
             raise ValueError(f"Agent B global review did not complete (status={response.status})")
         return GlobalBatchReview.model_validate(response.output_parsed)
@@ -84,12 +113,14 @@ class OpenAIAgentBClient:
         for number, data_url in visual_images:
             content.extend([{"type": "input_text", "text": f"Original rendered source page {number}:"},
                             {"type": "input_image", "image_url": data_url, "detail": "high"}])
+        started = time.monotonic()
         response = self.client.responses.parse(
             model=self.model,
             input=[{"role": "system", "content": "You are independent Agent B. Retry only the listed failed checks. The proposed final note is the primary target. Use only supplied evidence. Do not invent facts, examples, issues, or corrections. Return one check per listed category and only directly supported issues."},
                    {"role": "user", "content": content}],
-            text_format=TargetedRetryResult, store=False,
+            text_format=TargetedRetryResult, store=False, **self._options(),
         )
+        self._record(response, "retry_calls", time.monotonic() - started)
         if response.status != "completed" or response.output_parsed is None:
             raise ValueError(f"Agent B targeted retry did not complete (status={response.status})")
         return TargetedRetryResult.model_validate(response.output_parsed)
@@ -349,9 +380,10 @@ def review_staged_run(run: Path, vault: Path, llm: AgentBClient,
     result.overall_status = _status([item.status for item in reviewed])
     canonical_path = vault / "+ Inbox" / "Agent B - University Processing Review Instructions.md"
     canonical_chars = len(canonical_path.read_text(encoding="utf-8")) if canonical_path.is_file() else None
+    client_diagnostics = llm.diagnostics() if callable(getattr(llm, "diagnostics", None)) else {}
     _stage_review(run, artifacts.proposal.model_dump(mode="json"), requests, result, visual_inspected,
                   batch_request, canonical_chars, retry_requests, retry_results, retry_records,
-                  unsupported_records, retry_policy)
+                  unsupported_records, retry_policy, client_diagnostics)
     return result
 
 
@@ -359,7 +391,8 @@ def _stage_review(run: Path, proposal: dict[str, Any], requests: list[AgentBRequ
                   result: ReviewResult, visual_inspected: set[int], batch_request: BatchReviewRequest,
                   canonical_chars: int | None, retry_requests: list[TargetedRetryRequest],
                   retry_results: list[TargetedRetryResult], retry_records: list[dict[str, Any]],
-                  unsupported_records: list[dict[str, Any]], retry_policy: RetryPolicy) -> None:
+                  unsupported_records: list[dict[str, Any]], retry_policy: RetryPolicy,
+                  client_diagnostics: dict[str, Any]) -> None:
     output = run / "agent_b"
     output.mkdir(exist_ok=True)
     (output / "review.json").write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -413,6 +446,7 @@ def _stage_review(run: Path, proposal: dict[str, Any], requests: list[AgentBRequ
             "max_targeted_retries_per_change": retry_policy.max_targeted_retries_per_change,
             "max_checks_per_retry": retry_policy.max_checks_per_retry,
         },
+        "llm": client_diagnostics,
         "retry_request_chars": sum(item["retry_request_chars"] for item in retry_records),
         "retry_estimated_tokens": (sum(item["retry_request_chars"] for item in retry_records) + 3) // 4,
         "total_request_chars": sum(request_sizes) + len(batch_request.model_dump_json()) +
