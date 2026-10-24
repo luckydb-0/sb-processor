@@ -6,7 +6,8 @@ import os
 from pathlib import Path
 
 from .processing.llm import OpenAILLMClient
-from .review.runner import OpenAIAgentBClient, review_staged_run
+from .review.runner import (DEFAULT_REVIEW_MODEL, DEFAULT_REVIEW_REASONING_EFFORT,
+                            OpenAIAgentBClient, review_staged_run)
 from .documents.ingestion import ingest_pdf, stage_ingestion
 from .documents.pdf import compare_pdf_extractors
 from .processing.pipeline import process_source
@@ -51,12 +52,16 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--instructions", type=Path)
     process.add_argument("--with-agent-b", action="store_true", help="Review the staged proposal with Agent B")
     process.add_argument("--agent-b-instructions", type=Path)
-    process.add_argument("--agent-b-model", default="gpt-4o-mini")
+    process.add_argument("--agent-b-model", default=DEFAULT_REVIEW_MODEL)
+    process.add_argument("--agent-b-reasoning-effort", default=DEFAULT_REVIEW_REASONING_EFFORT,
+                         choices=["none", "minimal", "low", "medium", "high", "xhigh"])
     review = sub.add_parser("review", help="Run Agent B on an existing staged Agent A proposal")
     review.add_argument("--run", type=Path, required=True)
     review.add_argument("--vault", type=Path, required=True)
     review.add_argument("--instructions", type=Path)
-    review.add_argument("--model", default="gpt-4o-mini")
+    review.add_argument("--model", default=DEFAULT_REVIEW_MODEL)
+    review.add_argument("--reasoning-effort", default=DEFAULT_REVIEW_REASONING_EFFORT,
+                        choices=["none", "minimal", "low", "medium", "high", "xhigh"])
     compare = sub.add_parser("compare-pdf", help="Compare raw and cleaned PDF conversions without calling an LLM")
     compare.add_argument("--source", type=Path, required=True)
     compare.add_argument("--output-dir", type=Path, default=Path("staging/comparisons"))
@@ -114,12 +119,14 @@ def main(argv: list[str] | None = None) -> int:
                              max_discovered_concepts=args.max_discovered_concepts)
         print(f"Staged proposal: {run}")
         if args.with_agent_b:
-            result = review_staged_run(run, args.vault, OpenAIAgentBClient(args.agent_b_model),
+            result = review_staged_run(run, args.vault, OpenAIAgentBClient(
+                args.agent_b_model, reasoning_effort=args.agent_b_reasoning_effort),
                                        instructions_path=args.agent_b_instructions)
             print(f"Agent B review: {run / 'agent_b'} ({result.overall_status.value})")
     elif args.command == "review":
         _reject_inside_vault(parser, args.vault, args.run)
-        result = review_staged_run(args.run, args.vault, OpenAIAgentBClient(args.model),
+        result = review_staged_run(args.run, args.vault, OpenAIAgentBClient(
+            args.model, reasoning_effort=args.reasoning_effort),
                                    instructions_path=args.instructions)
         print(f"Agent B review: {args.run / 'agent_b'} ({result.overall_status.value})")
     elif args.command == "compare-pdf":

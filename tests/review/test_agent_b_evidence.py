@@ -1,16 +1,16 @@
-from sb_processor.review.context import AgentBRequest, SourcePageEvidence
+from sb_processor.review.context import AgentBRequest, ProposedReviewChange, SourcePageEvidence
 from sb_processor.review.evidence import (bind_issue_references, constrain_corrections,
                                            evidence_supported_alias_relation, normalize_promotion_check)
-from sb_processor.models import (Action, AliasAssessment, ChangeReview, NoteChange, PromotionAssessment,
+from sb_processor.models import (Action, AliasAssessment, ChangeReview, PromotionAssessment,
                                  ReviewCheck, CheckStatus, ReviewIssue, ReviewStatus)
 from sb_processor.review.checks import required_checks
 
 
 def _request(title: str, source: str, alias: str = "") -> AgentBRequest:
     content = f"---\ntype: concept\n---\n# {title}\nA supported claim."
-    return AgentBRequest(workflow="university", proposal_change=NoteChange(
+    return AgentBRequest(workflow="university", proposal_change=ProposedReviewChange(
         action=Action.CREATE, note_type="concept", title=title, target_path=f"Dots/{title}.md",
-        reason="test", content=content, sources=[], candidate_existing_notes=[], original_content_hash=None),
+        reason="test", proposed_final_content=content, sources=[], candidate_existing_notes=[], original_content_hash=None),
         proposal_summary="", source_metadata={}, source_evidence=[SourcePageEvidence(page_number=35, text=source)],
         source_pages_available=1, evidence_selection="explicit", affected_existing_notes=[], retrieval_evidence=[],
         review_instructions="", required_checks=required_checks("concept"), aliases_to_review=[alias] if alias else [])
@@ -37,7 +37,7 @@ def test_similarity_matching_does_not_gain_unsourced_distance_examples():
 
 def test_invented_example_in_agent_a_proposal_does_not_authorize_correction():
     request = _request("Similarity Matching", "Similarity matching requires suitable similarity measures.")
-    request.proposal_change.content += " For example, Euclidean distance."
+    request.proposal_change.proposed_final_content += " For example, Euclidean distance."
     review = _review([ReviewIssue(change_path="Dots/Similarity Matching.md", issue_type="source_fidelity",
         severity="medium", explanation="Example unsupported", source_pages=[35],
         proposed_correction="Add examples such as Euclidean distance.",

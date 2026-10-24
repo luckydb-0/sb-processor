@@ -3,6 +3,8 @@ from pathlib import Path
 
 from sb_processor.review.context import build_review_request, load_review_artifacts
 from sb_processor.models import Action, NoteChange, ProcessingProposal
+from sb_processor.models import ReviewIssue, SourceReference
+from sb_processor.review.retry import valid_issue_evidence
 
 
 def test_review_request_selects_provenance_pages_and_affected_notes(tmp_path: Path):
@@ -29,6 +31,43 @@ def test_review_request_selects_provenance_pages_and_affected_notes(tmp_path: Pa
     assert request.source_evidence[0].visual_extraction == "A diagram"
     assert [note.path for note in request.affected_existing_notes] == ["Dots/B.md"]
     assert request.review_instructions == "RULES"
+
+
+def test_dataset_update_serializes_proposed_final_content_separately_from_old_note(tmp_path: Path):
+    """The v1.1 Dataset reviewer treated the pre-update body as the proposed result."""
+    old = "A dataset is a table of examples."
+    proposed = ("---\ntype: concept\n---\n# Dataset\n"
+                "Real-world data need not start as tables; some techniques require transformation into a table-like form.")
+    change = NoteChange(action=Action.UPDATE, note_type="concept", title="Dataset",
+        target_path="Dots/Dataset.md", reason="Add broader account", content=proposed,
+        sources=["lecture.pdf"], candidate_existing_notes=[], original_content_hash="prior-hash")
+    proposal = ProcessingProposal(workflow="university", source="lecture.pdf", source_summary="Dataset",
+        vault_note_count=1, note_changes=[change], review_required=[])
+    (tmp_path / "proposal.json").write_text(proposal.model_dump_json())
+    (tmp_path / "request_context.json").write_text(json.dumps({"source_metadata": {},
+        "source_text": "[Page 1]\nTEXT:\nReal data may require transformation into tables.",
+        "relevant_existing_notes": [{"path": "Dots/Dataset.md", "title": "Dataset",
+                                    "note_type": "concept", "body": old}]}))
+    (tmp_path / "source_analysis.json").write_text(json.dumps({"candidate_concepts": [
+        {"proposed_name": "Dataset", "source_pages": [1]}]}))
+    (tmp_path / "retrieval_evidence.json").write_text("[]")
+
+    payload = build_review_request(load_review_artifacts(tmp_path), change, "RULES").model_dump(mode="json")
+    assert "transformation into a table-like form" in payload["proposal_change"]["proposed_final_content"]
+    assert "content" not in payload["proposal_change"]
+    assert payload["affected_existing_notes"][0]["existing_content"] == old
+    assert "body" not in payload["affected_existing_notes"][0]
+
+    request = build_review_request(load_review_artifacts(tmp_path), change, "RULES")
+    vague_loss = ReviewIssue(change_path="Dots/Dataset.md", issue_type="existing_note",
+        severity="medium", explanation="The old note lacks details added by the update",
+        proposed_correction="Restore the old note", evidence_refs=[SourceReference(
+            note_path="Dots/Dataset.md", reference="Existing dataset definition")])
+    assert not valid_issue_evidence(vague_loss, request)
+    supported_loss = vague_loss.model_copy(update={"evidence_refs": [SourceReference(
+        note_path="Dots/Dataset.md", reference='Old note says "A dataset is a table of examples."')],
+        "explanation": "This old statement is missing from the proposed final note"})
+    assert valid_issue_evidence(supported_loss, request)
 
 
 def test_renamed_concept_uses_overlapping_discovery_provenance(tmp_path: Path):

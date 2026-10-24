@@ -4,6 +4,7 @@ from pathlib import Path
 import pymupdf
 
 from sb_processor.review.runner import review_staged_run
+from sb_processor.review.retry import RetryPolicy
 from sb_processor.models import ReviewCheck, CheckStatus, GlobalBatchReview
 from sb_processor.review.checks import required_checks
 
@@ -19,7 +20,7 @@ class _ReviewBatchMixin:
 
 from sb_processor.models import (Action, AliasAssessment, ChangeReview, NoteChange, ProcessingProposal,
                                  PromotionAssessment,
-                                 ReviewIssue, ReviewStatus)
+                                 ReviewIssue, ReviewStatus, SourceReference)
 
 
 def _run(tmp_path: Path, *, visual: bool = False) -> tuple[Path, Path]:
@@ -57,6 +58,8 @@ def test_pass_stages_separate_review_and_preserves_proposal(tmp_path: Path):
     class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             assert "Detecting a problem does NOT grant permission" in request.review_instructions
+            assert "proposed_final_content" in request.review_instructions
+            assert "primary review target" in request.review_instructions
             assert [p.page_number for p in request.source_evidence] == [1]
             return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[], promotion_assessment=PromotionAssessment(
                 status=ReviewStatus.PASS, explanation="Independent concept", proposed_correction=""))
@@ -66,6 +69,7 @@ def test_pass_stages_separate_review_and_preserves_proposal(tmp_path: Path):
     assert (run / "agent_b" / "review.json").exists()
     assert (run / "agent_b" / "detailed_report.md").exists()
     assert (run / "SUMMARY.md").exists()
+    assert "## Needs human decision" in (run / "SUMMARY.md").read_text()
     assert (run / "agent_b" / "diagnostics.json").exists()
     assert (run / "proposal.json").read_bytes() == original
 
@@ -125,7 +129,9 @@ def test_invalid_alias_and_weak_dot_are_reported_separately(tmp_path: Path):
     class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             assert request.aliases_to_review == ["K-Fold A"]
-            return ChangeReview(checks=_checks(CheckStatus.FAIL), status=ReviewStatus.PASS, issues=[], alias_assessments=[AliasAssessment(
+            return ChangeReview(checks=_checks(CheckStatus.FAIL), status=ReviewStatus.PASS, issues=[ReviewIssue(
+                change_path="Dots/A.md", issue_type="dot_promotion", severity="medium",
+                explanation="Independent identity unclear", proposed_correction="Human decides", source_pages=[1])], alias_assessments=[AliasAssessment(
                 alias="K-Fold A", status=ReviewStatus.REVIEW_REQUIRED, relation="SUBTYPE",
                 explanation="Subtype", proposed_correction="Remove alias")],
                 promotion_assessment=PromotionAssessment(status=ReviewStatus.REVIEW_REQUIRED,
@@ -164,7 +170,7 @@ def test_generic_runner_accepts_a_workflow_review_adapter(tmp_path: Path):
     assert result.overall_status == ReviewStatus.PASS
 
 
-def test_uncited_subtype_claim_requires_review(tmp_path: Path):
+def test_uncited_new_alias_is_removed_conservatively(tmp_path: Path):
     run, vault = _run(tmp_path)
     proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
     proposal.note_changes[0].content = "---\ntype: concept\naliases: [K-Fold A]\n---\n# A"
@@ -179,8 +185,51 @@ def test_uncited_subtype_claim_requires_review(tmp_path: Path):
                     explanation="Independent", proposed_correction=""))
 
     result = review_staged_run(run, vault, Reviewer())
-    assert result.overall_status == ReviewStatus.REVIEW_REQUIRED
-    assert "lacks cited evidence" in result.issues[0].explanation
+    assert result.overall_status == ReviewStatus.FIX
+    assert result.issues[0].proposed_correction == "Remove alias 'K-Fold A' from frontmatter"
+
+
+def test_unsupported_new_abbreviation_is_fix_not_human_decision(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
+    change = proposal.note_changes[0]
+    change.title = "Data-Driven Decision Making"
+    change.target_path = "Dots/Data-Driven Decision Making.md"
+    change.content = "---\ntype: concept\naliases: [DDD]\n---\n# Data-Driven Decision Making\nA is supported."
+    (run / "proposal.json").write_text(proposal.model_dump_json())
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            return ChangeReview(checks=_checks(), status=ReviewStatus.REVIEW_REQUIRED, issues=[],
+                alias_assessments=[AliasAssessment(alias="DDD", relation="AMBIGUOUS",
+                    status=ReviewStatus.REVIEW_REQUIRED, explanation="No supplied identity evidence",
+                    proposed_correction="Ask the user", evidence_refs=[SourceReference(
+                        note_path="Dots/Data-Driven Decision Making.md",
+                        reference="DDD appears only in the proposed alias frontmatter")])],
+                promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
+                    explanation="Independent", proposed_correction="", foundational_identity=True))
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.FIX
+    assert result.issues[0].issue_type.value == "alias"
+    assert result.issues[0].proposed_correction == "Remove alias 'DDD' from frontmatter"
+    assert "DDD" not in (run / "SUMMARY.md").read_text().split("## Needs human decision", 1)[1].split(
+        "## Systematic issues", 1)[0]
+
+
+def test_positive_issue_for_passing_check_is_not_actionable(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            return ChangeReview(checks=_checks(), status=ReviewStatus.FIX, issues=[ReviewIssue(
+                change_path="Dots/A.md", issue_type="duplicate_concept", severity="low",
+                explanation="No duplicate concept problem is evidenced",
+                proposed_correction="No change needed", source_pages=[1])])
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert result.issues == []
 
 
 def test_review_does_not_overwrite_existing_agent_b_artifacts(tmp_path: Path):
@@ -226,6 +275,10 @@ def test_orthographic_alias_does_not_require_invented_distinction(tmp_path: Path
     class Reviewer(_ReviewBatchMixin):
         def review_change(self, request, visual_images):
             return ChangeReview(checks=_checks(), status=ReviewStatus.PASS, issues=[],
+                alias_assessments=[AliasAssessment(alias="Data Set", relation="VARIANT",
+                    status=ReviewStatus.PASS, explanation="Exact-title spelling variant",
+                    proposed_correction="", evidence_refs=[SourceReference(
+                        note_path="Dots/Dataset.md", reference="Exact-title spelling variant")])],
                 promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
                     explanation="Independent", proposed_correction="", foundational_identity=True))
 
@@ -235,7 +288,7 @@ def test_orthographic_alias_does_not_require_invented_distinction(tmp_path: Path
     assert next(check for check in result.reviewed_changes[0].checks if check.category.value == "aliases").status == CheckStatus.PASS
 
 
-def test_failed_check_without_issue_blocks_ready_status(tmp_path: Path):
+def test_failed_check_still_unsupported_after_retry_becomes_insufficient(tmp_path: Path):
     run, vault = _run(tmp_path)
 
     class Reviewer(_ReviewBatchMixin):
@@ -246,10 +299,15 @@ def test_failed_check_without_issue_blocks_ready_status(tmp_path: Path):
                 promotion_assessment=PromotionAssessment(status=ReviewStatus.PASS,
                     explanation="Independent", proposed_correction=""))
 
+        def review_failed_checks(self, request, visual_images):
+            return {"checks": [{"category": "source_fidelity", "status": "FAIL"}],
+                    "issues": [], "status": "REVIEW_REQUIRED"}
+
     result = review_staged_run(run, vault, Reviewer())
-    assert result.reviewed_changes[0].status == ReviewStatus.REVIEW_REQUIRED
-    assert any(issue.issue_type.value == "evidence_gap" and "source_fidelity" in issue.explanation
-               for issue in result.issues)
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert not result.issues
+    assert any(check.category.value == "source_fidelity" and check.status == CheckStatus.INSUFFICIENT_EVIDENCE
+               for check in result.reviewed_changes[0].checks)
 
 
 def test_distinct_semantic_provenance_issue_survives_pdf_metadata_fix(tmp_path: Path):
@@ -268,3 +326,359 @@ def test_distinct_semantic_provenance_issue_survives_pdf_metadata_fix(tmp_path: 
 
     result = review_staged_run(run, vault, Reviewer())
     assert any("Wrong Lecture wikilink" in issue.explanation for issue in result.issues)
+
+
+def test_unsupported_fail_retries_only_failed_category_and_can_pass(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "source_fidelity").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            assert [category.value for category in request.categories] == ["source_fidelity"]
+            assert request.previous_checks[0].status == CheckStatus.FAIL
+            assert "A is supported" in request.review_context.proposal_change.proposed_final_content
+            return {"checks": [{"category": "source_fidelity", "status": "PASS"}],
+                    "issues": [], "status": "PASS"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert not result.issues
+    diagnostics = json.loads((run / "agent_b" / "diagnostics.json").read_text())
+    assert diagnostics["retry_count"] == 1
+    assert diagnostics["retry_checks_changed_to_pass"] == 1
+    assert (run / "agent_b" / "retries" / "001_response.json").is_file()
+
+
+def test_targeted_retry_recovers_supported_source_issue(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "source_fidelity").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            return {"checks": [{"category": "source_fidelity", "status": "FAIL",
+                                "explanation": "The proposed claim exceeds page 1"}],
+                    "issues": [{"change_path": "Dots/A.md", "issue_type": "source_fidelity",
+                                "severity": "medium", "explanation": "Proposed claim exceeds the source",
+                                "proposed_correction": "Remove the unsupported wording", "source_pages": [1],
+                                "corrected_content": "A speculative replacement"}],
+                    "status": "FIX"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.FIX
+    assert any(issue.issue_type.value == "source_fidelity" for issue in result.issues)
+    assert all(issue.corrected_content is None for issue in result.issues)
+    diagnostics = json.loads((run / "agent_b" / "diagnostics.json").read_text())
+    assert diagnostics["retry_issues_recovered"] == 1
+
+
+def test_retry_insufficient_source_evidence_does_not_force_human_decision(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "source_fidelity").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            return {"checks": [{"category": "source_fidelity", "status": "INSUFFICIENT_EVIDENCE",
+                                "explanation": "Page 1 is too sparse to establish the concern"}],
+                    "issues": [], "status": "PASS"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert not result.issues
+    assert any(check.category.value == "source_fidelity" and check.status == CheckStatus.INSUFFICIENT_EVIDENCE
+               for check in result.reviewed_changes[0].checks)
+    summary = (run / "SUMMARY.md").read_text()
+    assert "Review evidence gaps" not in summary
+    assert "## Reviewer quality" in summary
+    assert "Initial unsupported FAILs: 1" in summary
+    assert "Targeted retries: 1" in summary
+    assert "Checks unresolved after retry: 1" in summary
+
+
+def test_retry_insufficient_boundary_without_supported_issue_does_not_escalate(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "concept_boundaries").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            return {"checks": [{"category": "concept_boundaries", "status": "INSUFFICIENT_EVIDENCE",
+                                "explanation": "The supplied notes do not resolve whether the concepts overlap"}],
+                    "issues": [], "status": "REVIEW_REQUIRED"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert not result.issues
+
+
+def test_genuine_supported_boundary_decision_survives_unrelated_retry(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "claim_strength").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[ReviewIssue(
+                change_path="Dots/A.md", issue_type="concept_boundary", severity="medium",
+                explanation="Two supplied definitions may refer to different concepts",
+                proposed_correction="Choose merge or separation", source_pages=[1])])
+
+        def review_failed_checks(self, request, visual_images):
+            return {"checks": [{"category": "claim_strength", "status": "INSUFFICIENT_EVIDENCE"}],
+                    "issues": [], "status": "PASS"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.REVIEW_REQUIRED
+    assert any(issue.issue_type.value == "concept_boundary" for issue in result.issues)
+
+
+def test_retried_dot_promotion_uncertainty_without_issue_is_not_human_decision(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "dot_promotion").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            return {"checks": [{"category": "dot_promotion", "status": "INSUFFICIENT_EVIDENCE"}],
+                    "issues": [], "status": "REVIEW_REQUIRED"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert not result.issues
+
+
+def test_supported_first_pass_fail_does_not_retry(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "source_fidelity").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.FIX, issues=[ReviewIssue(
+                change_path="Dots/A.md", issue_type="source_fidelity", severity="medium",
+                explanation="Source does not support this claim", proposed_correction="Remove it", source_pages=[1])])
+
+        def review_failed_checks(self, request, visual_images):
+            raise AssertionError("Supported first-pass finding must not be retried")
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.FIX
+    assert json.loads((run / "agent_b" / "diagnostics.json").read_text())["retry_count"] == 0
+
+
+def test_deterministic_provenance_fail_does_not_retry_semantics(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
+    proposal.note_changes[0].content = "---\ntype: concept\nsource_file: source.pdf\n---\n# A\nA is supported."
+    (run / "proposal.json").write_text(proposal.model_dump_json())
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            assert any(item["issue_type"] == "provenance" for item in request.deterministic_findings)
+            checks = _checks()
+            next(check for check in checks if check.category.value == "provenance").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.FIX, issues=[ReviewIssue(
+                change_path="Dots/A.md", issue_type="provenance", severity="medium",
+                explanation="Raw source path is duplicated in the Concept note",
+                proposed_correction="Remove the raw source path", source_pages=[1])])
+
+        def review_failed_checks(self, request, visual_images):
+            raise AssertionError("Objective provenance is already validated")
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.FIX
+    assert sum(issue.issue_type.value == "provenance" for issue in result.issues) == 1
+    assert json.loads((run / "agent_b" / "diagnostics.json").read_text())["retry_count"] == 0
+
+
+def test_nonblocking_insufficient_retry_keeps_objective_fix_auto_fixable(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
+    proposal.note_changes[0].content = "---\ntype: concept\nsource_file: source.pdf\n---\n# A\nA is supported."
+    (run / "proposal.json").write_text(proposal.model_dump_json())
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "source_fidelity").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            return {"checks": [{"category": "source_fidelity", "status": "INSUFFICIENT_EVIDENCE"}],
+                    "issues": [], "status": "PASS"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.FIX
+    assert {issue.issue_type.value for issue in result.issues} == {"provenance"}
+
+
+def test_low_impact_unsupported_fail_becomes_terminal_insufficient_without_retry(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "naming").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            raise AssertionError("Low-impact unsupported failure must not consume a retry")
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert next(check for check in result.reviewed_changes[0].checks
+                if check.category.value == "naming").status == CheckStatus.INSUFFICIENT_EVIDENCE
+    diagnostics = json.loads((run / "agent_b" / "diagnostics.json").read_text())
+    assert diagnostics["initial_unsupported_fail_count"] == 1
+    assert diagnostics["retry_count"] == 0
+    assert diagnostics["unsupported_failures_skipped"] == 1
+
+
+def test_material_boundary_failure_is_selected_for_targeted_retry(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "concept_boundaries").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            assert [category.value for category in request.categories] == ["concept_boundaries"]
+            return {"checks": [{"category": "concept_boundaries", "status": "PASS"}],
+                    "issues": [], "status": "PASS"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert json.loads((run / "agent_b" / "diagnostics.json").read_text())["retry_count"] == 1
+
+
+def test_retry_policy_caps_calls_and_checks_per_change(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            for category in ("source_fidelity", "claim_strength", "concept_boundaries"):
+                next(check for check in checks if check.category.value == category).status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            assert [category.value for category in request.categories] == ["source_fidelity"]
+            return {"checks": [{"category": "source_fidelity", "status": "INSUFFICIENT_EVIDENCE"}],
+                    "issues": [], "status": "PASS"}
+
+    result = review_staged_run(run, vault, Reviewer(), retry_policy=RetryPolicy(
+        max_targeted_retries_per_change=1, max_checks_per_retry=1))
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    statuses = {check.category.value: check.status for check in result.reviewed_changes[0].checks}
+    assert statuses["source_fidelity"] == CheckStatus.INSUFFICIENT_EVIDENCE
+    assert statuses["claim_strength"] == CheckStatus.INSUFFICIENT_EVIDENCE
+    assert statuses["concept_boundaries"] == CheckStatus.INSUFFICIENT_EVIDENCE
+    diagnostics = json.loads((run / "agent_b" / "diagnostics.json").read_text())
+    assert diagnostics["retry_count"] == 1
+    assert diagnostics["retry_checks_retried"] == 1
+    assert diagnostics["unsupported_failures_skipped"] == 2
+
+
+def test_zero_retry_budget_terminally_settles_material_failure(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "source_fidelity").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            raise AssertionError("Zero retry budget must prevent a second call")
+
+    result = review_staged_run(run, vault, Reviewer(), retry_policy=RetryPolicy(
+        max_targeted_retries_per_change=0, max_checks_per_retry=4))
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    diagnostics = json.loads((run / "agent_b" / "diagnostics.json").read_text())
+    assert diagnostics["retry_count"] == 0
+    assert diagnostics["unsupported_failures_skipped"] == 1
+
+
+def test_targeted_retry_ignores_extra_checklist_categories(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            checks = _checks()
+            next(check for check in checks if check.category.value == "source_fidelity").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[])
+
+        def review_failed_checks(self, request, visual_images):
+            return {"checks": [
+                        {"category": "source_fidelity", "status": "PASS"},
+                        {"category": "naming", "status": "FAIL", "explanation": "Unrequested opinion"},
+                    ],
+                    "issues": [{"change_path": "Dots/A.md", "issue_type": "naming", "severity": "medium",
+                                "explanation": "Unrequested opinion", "proposed_correction": "Rename A",
+                                "source_pages": [1]}],
+                    "status": "FIX"}
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert result.issues == []
+    assert next(check for check in result.reviewed_changes[0].checks
+                if check.category.value == "naming").status == CheckStatus.PASS
+
+
+def test_agent_a_human_decision_reason_survives_objective_fix_issue(tmp_path: Path):
+    run, vault = _run(tmp_path)
+    proposal = ProcessingProposal.model_validate_json((run / "proposal.json").read_text())
+    proposal.note_changes[0].action = Action.REVIEW_REQUIRED
+    proposal.note_changes[0].reason = "Decide whether Classification and Predictive Classification should merge"
+    (run / "proposal.json").write_text(proposal.model_dump_json())
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            return ChangeReview(checks=_checks(), status=ReviewStatus.FIX, issues=[ReviewIssue(
+                change_path="Dots/A.md", issue_type="provenance", severity="medium",
+                explanation="Objective provenance format issue", proposed_correction="Remove metadata",
+                source_pages=[1])])
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.REVIEW_REQUIRED
+    assert {issue.issue_type.value for issue in result.issues} == {"provenance", "existing_note"}
+    assert any("Classification and Predictive Classification" in issue.explanation for issue in result.issues)
+
+
+def test_alias_fail_is_not_actionable_when_no_alias_is_proposed(tmp_path: Path):
+    run, vault = _run(tmp_path)
+
+    class Reviewer(_ReviewBatchMixin):
+        def review_change(self, request, visual_images):
+            assert request.aliases_to_review == []
+            checks = _checks()
+            next(check for check in checks if check.category.value == "aliases").status = CheckStatus.FAIL
+            return ChangeReview(checks=checks, status=ReviewStatus.REVIEW_REQUIRED, issues=[],
+                alias_assessments=[AliasAssessment(alias="Unproposed", relation="AMBIGUOUS",
+                    status=ReviewStatus.REVIEW_REQUIRED, explanation="Not in final content",
+                    proposed_correction="Review")])
+
+    result = review_staged_run(run, vault, Reviewer())
+    assert result.reviewed_changes[0].status == ReviewStatus.PASS
+    assert result.issues == []
+    assert next(check for check in result.reviewed_changes[0].checks
+                if check.category.value == "aliases").status == CheckStatus.NOT_APPLICABLE
