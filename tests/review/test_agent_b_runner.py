@@ -375,7 +375,12 @@ def test_retry_insufficient_source_evidence_does_not_force_human_decision(tmp_pa
     assert not result.issues
     assert any(check.category.value == "source_fidelity" and check.status == CheckStatus.INSUFFICIENT_EVIDENCE
                for check in result.reviewed_changes[0].checks)
-    assert "Review evidence gaps" not in (run / "SUMMARY.md").read_text()
+    summary = (run / "SUMMARY.md").read_text()
+    assert "Review evidence gaps" not in summary
+    assert "## Reviewer quality" in summary
+    assert "Initial unsupported FAILs: 1" in summary
+    assert "Targeted retries: 1" in summary
+    assert "Checks unresolved after retry: 1" in summary
 
 
 def test_retry_insufficient_boundary_without_supported_issue_does_not_escalate(tmp_path: Path):

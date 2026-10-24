@@ -438,13 +438,17 @@ def _stage_review(run: Path, proposal: dict[str, Any], requests: list[AgentBRequ
             lines += [f"- **{issue.category.value}** ({issue.status.value}; {len(issue.affected_paths)} notes): {issue.explanation}",
                       f"  Recommendation: {issue.recommendation}"]
     (output / "detailed_report.md").write_text("\n".join(lines), encoding="utf-8")
-    _stage_summary(run, result)
+    _stage_summary(run, result, diagnostics)
 
 
-def _stage_summary(run: Path, result: ReviewResult) -> None:
+def _stage_summary(run: Path, result: ReviewResult, diagnostics: dict[str, Any]) -> None:
     counts = {status: sum(item.status == status for item in result.reviewed_changes) for status in ReviewStatus}
     groups = systematic_issue_groups(result.issues)
     lines = ["# Review Summary", "", f"Agent A proposed: {len(result.reviewed_changes)} changes", "",
+             "## Reviewer quality", "",
+             f"Initial unsupported FAILs: {diagnostics['initial_unsupported_fail_count']}",
+             f"Targeted retries: {diagnostics['retry_count']}",
+             f"Checks unresolved after retry: {diagnostics['retry_checks_changed_to_insufficient_evidence']}", "",
              f"## Ready — {counts[ReviewStatus.PASS]}", ""]
     lines.extend(f"- {item.change_path.rsplit('/', 1)[-1].removesuffix('.md')}" for item in result.reviewed_changes
                  if item.status == ReviewStatus.PASS)
