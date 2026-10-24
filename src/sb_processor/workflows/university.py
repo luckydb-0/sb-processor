@@ -4,11 +4,11 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from ..extraction import extract_document
-from ..ingestion import ingest_pdf
-from ..pdf import MAX_SOURCE_CHARS, PdfExtractor
-from ..visual import VisualPageExtractor
-from ..retrieval import RetrievalPolicy
+from ..documents.extraction import extract_document
+from ..documents.ingestion import ingest_pdf
+from ..documents.pdf import MAX_SOURCE_CHARS, PdfExtractor
+from ..documents.visual import VisualPageExtractor
+from ..knowledge.retrieval import RetrievalPolicy
 
 
 class UniversityWorkflow:

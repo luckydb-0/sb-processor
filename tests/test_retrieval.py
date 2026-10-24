@@ -1,6 +1,6 @@
-from sb_processor.registry import Registry
-from sb_processor.retrieval import RetrievalPolicy, retrieve_notes
-from sb_processor.vault import scan_vault
+from sb_processor.knowledge.registry import Registry
+from sb_processor.knowledge.retrieval import RetrievalPolicy, retrieve_notes
+from sb_processor.knowledge.vault import scan_vault
 
 
 def note(vault, path, text):

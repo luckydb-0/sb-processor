@@ -8,7 +8,7 @@ from typing import Any, Iterator
 
 import yaml
 
-from .models import ScannedNote
+from ..models import ScannedNote
 
 log = logging.getLogger(__name__)
 _HEADING = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)

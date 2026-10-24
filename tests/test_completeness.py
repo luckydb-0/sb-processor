@@ -1,4 +1,4 @@
-from sb_processor.extraction import (
+from sb_processor.documents.extraction import (
     CompletenessStatus, ExtractedDocument, ExtractedPage, VisualPageContent,
     VisualProcessingStatus,
 )

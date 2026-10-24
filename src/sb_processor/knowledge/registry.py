@@ -7,7 +7,7 @@ import unicodedata
 from pathlib import Path
 from typing import Iterable
 
-from .models import CandidateMatch, NoteMetadata, ScannedNote
+from ..models import CandidateMatch, NoteMetadata, ScannedNote
 
 _WORD = re.compile(r"\w+", re.UNICODE)
 

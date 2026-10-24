@@ -2,7 +2,7 @@ import pymupdf
 import sys
 from types import SimpleNamespace
 
-from sb_processor.extraction import DoclingExtractor, extract_document
+from sb_processor.documents.extraction import DoclingExtractor, extract_document
 
 
 def test_raw_extraction_preserves_numbered_pages_and_positions(tmp_path):
@@ -134,7 +134,7 @@ def test_docling_preserves_pages_tables_pictures_and_visual_gate(tmp_path, monke
     assert result.pages[1].blocks[0].block_type == "table"
     assert "[Page 2]" in result.agent_markdown()
     assert "| 1 | 2 |" in result.agent_markdown()
-    from sb_processor.cleaning import DocumentCleaner
+    from sb_processor.documents.cleaning import DocumentCleaner
     cleaned = DocumentCleaner().clean(result)
     assert cleaned.completeness.status.value == "PARTIAL"
     assert cleaned.completeness.unprocessed_visual_pages == [2]

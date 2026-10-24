@@ -1,6 +1,6 @@
-from sb_processor.cleaning import DocumentCleaner
-from sb_processor.comparison import _metrics
-from sb_processor.extraction import ExtractedBlock, ExtractedDocument, ExtractedPage
+from sb_processor.documents.cleaning import DocumentCleaner
+from sb_processor.documents.comparison import _metrics
+from sb_processor.documents.extraction import ExtractedBlock, ExtractedDocument, ExtractedPage
 
 
 def test_comparison_metrics_audit_sections_transforms_and_visual_flags():

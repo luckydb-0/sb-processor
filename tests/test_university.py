@@ -2,7 +2,7 @@ import pymupdf
 import pytest
 
 from sb_processor.workflows.university import UniversityWorkflow
-from sb_processor.extraction import ExtractedDocument, ExtractedPage
+from sb_processor.documents.extraction import ExtractedDocument, ExtractedPage
 
 
 def test_university_workflow_extracts_pdf_and_external_rules(tmp_path):

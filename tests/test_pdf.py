@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pymupdf
 import pytest
 
-from sb_processor.pdf import compare_pdf_extractors, extract_pdf
+from sb_processor.documents.pdf import compare_pdf_extractors, extract_pdf
 
 
 def make_pdf(path):
@@ -59,8 +59,8 @@ def test_comparison_writes_both_extractions_without_llm(tmp_path):
 
 def test_comparison_can_include_docling_without_requiring_it_by_default(tmp_path, monkeypatch):
     pytest.importorskip("anydoc")
-    from sb_processor import comparison
-    from sb_processor.extraction import extract_document
+    from sb_processor.documents import comparison
+    from sb_processor.documents.extraction import extract_document
 
     pdf = tmp_path / "lecture.pdf"
     make_pdf(pdf)

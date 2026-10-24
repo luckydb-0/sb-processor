@@ -16,8 +16,8 @@ from .agent_b_validators import validate_change
 from .review_checks import validate_check_coverage
 from .models import (Action, AliasRelation, ChangeReview, GlobalBatchReview, IssueSeverity, ReviewIssue, ReviewedChange,
                      ReviewResult, ReviewStatus, NoteChange, CheckStatus, ReviewCategory, ReviewCheck, SourceReference)
-from .vault import scan_vault
-from .registry import normalize
+from .knowledge.vault import scan_vault
+from .knowledge.registry import normalize
 from .workflows.university_review import UniversityReviewAdapter
 
 

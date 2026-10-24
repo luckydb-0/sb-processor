@@ -1,7 +1,7 @@
-from sb_processor.registry import Registry
-from sb_processor.retrieval import RetrievalPolicy
-from sb_processor.semantic import SemanticIndex, concept_representation
-from sb_processor.vault import scan_vault
+from sb_processor.knowledge.registry import Registry
+from sb_processor.knowledge.retrieval import RetrievalPolicy
+from sb_processor.knowledge.semantic import SemanticIndex, concept_representation
+from sb_processor.knowledge.vault import scan_vault
 
 
 class FakeEmbedder:

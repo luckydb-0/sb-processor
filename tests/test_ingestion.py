@@ -2,7 +2,7 @@ import json
 
 import pymupdf
 
-from sb_processor.ingestion import ingest_pdf, stage_ingestion
+from sb_processor.documents.ingestion import ingest_pdf, stage_ingestion
 
 
 def test_ingestion_artifacts_keep_raw_clean_visual_and_completeness(tmp_path):

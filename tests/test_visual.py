@@ -1,5 +1,5 @@
-from sb_processor.cleaning import DocumentCleaner
-from sb_processor.extraction import ExtractedDocument, ExtractedPage
+from sb_processor.documents.cleaning import DocumentCleaner
+from sb_processor.documents.extraction import ExtractedDocument, ExtractedPage
 
 
 def visual_page(number, text, *, image_area=0.0, vector_area=0.0):

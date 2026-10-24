@@ -1,5 +1,5 @@
-from sb_processor.vault import scan_vault
-from sb_processor.registry import Registry
+from sb_processor.knowledge.vault import scan_vault
+from sb_processor.knowledge.registry import Registry
 
 
 def test_scanner_reads_frontmatter_and_missing_metadata(tmp_path):

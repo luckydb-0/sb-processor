@@ -7,7 +7,7 @@ import re
 import yaml
 
 from .models import Action, IssueSeverity, NoteChange, NoteMetadata, ReviewIssue, SourceReference
-from .registry import normalize
+from .knowledge.registry import normalize
 from .staging import audit_wikilinks
 
 

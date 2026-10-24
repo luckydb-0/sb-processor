@@ -12,10 +12,10 @@ from pydantic import Field
 import yaml
 
 from .agent_a import ExistingNoteContext
-from .extraction import ProcessingCompleteness
+from .documents.extraction import ProcessingCompleteness
 from .models import Action, NoteChange, ProcessingProposal, ReviewCategory, StrictModel
 from .review_checks import required_checks
-from .registry import normalize
+from .knowledge.registry import normalize
 
 
 class SourcePageEvidence(StrictModel):

@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from sb_processor.registry import Registry
-from sb_processor.retrieval import RetrievalPolicy, retrieve_candidate
-from sb_processor.semantic import SemanticIndex
-from sb_processor.vault import scan_vault
+from sb_processor.knowledge.registry import Registry
+from sb_processor.knowledge.retrieval import RetrievalPolicy, retrieve_candidate
+from sb_processor.knowledge.semantic import SemanticIndex
+from sb_processor.knowledge.vault import scan_vault
 
 
 @pytest.mark.skipif(os.environ.get("SB_RUN_LOCAL_MODEL_TEST") != "1",

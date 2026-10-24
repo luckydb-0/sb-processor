@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from .models import CandidateMatch, NoteMetadata
+from ..models import CandidateMatch, NoteMetadata
 from .registry import Registry, lexical_tokens, normalize
 
 

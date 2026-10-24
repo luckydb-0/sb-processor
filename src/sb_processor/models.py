@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .extraction import ProcessingCompleteness
+from .documents.extraction import ProcessingCompleteness
 
 
 class StrictModel(BaseModel):

@@ -7,15 +7,15 @@ from pathlib import Path
 
 from .llm import OpenAILLMClient
 from .agent_b import OpenAIAgentBClient, review_staged_run
-from .ingestion import ingest_pdf, stage_ingestion
-from .pdf import compare_pdf_extractors
+from .documents.ingestion import ingest_pdf, stage_ingestion
+from .documents.pdf import compare_pdf_extractors
 from .pipeline import process_source
-from .registry import Registry
-from .vault import scan_vault
+from .knowledge.registry import Registry
+from .knowledge.vault import scan_vault
 from .workflows.university import UniversityWorkflow
-from .visual import OpenAIVisualPageExtractor
-from .semantic import DEFAULT_EMBEDDING_MODEL
-from .retrieval import DEFAULT_SEMANTIC_THRESHOLD
+from .documents.visual import OpenAIVisualPageExtractor
+from .knowledge.semantic import DEFAULT_EMBEDDING_MODEL
+from .knowledge.retrieval import DEFAULT_SEMANTIC_THRESHOLD
 
 
 def build_parser() -> argparse.ArgumentParser:

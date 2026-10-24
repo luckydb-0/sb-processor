@@ -1,5 +1,5 @@
-from sb_processor.cleaning import DocumentCleaner
-from sb_processor.extraction import ExtractedBlock, ExtractedDocument, ExtractedPage
+from sb_processor.documents.cleaning import DocumentCleaner
+from sb_processor.documents.extraction import ExtractedBlock, ExtractedDocument, ExtractedPage
 
 
 def page(number, body, footer=None, footer_y=92, header=None):

@@ -2,10 +2,10 @@ from types import SimpleNamespace
 
 import pymupdf
 
-from sb_processor.extraction import (
+from sb_processor.documents.extraction import (
     CompletenessStatus, ExtractedDocument, ExtractedPage, VisualPageContent, VisualProcessingStatus,
 )
-from sb_processor.visual import OpenAIVisualPageExtractor, VisualPageContext, enrich_visual_pages
+from sb_processor.documents.visual import OpenAIVisualPageExtractor, VisualPageContext, enrich_visual_pages
 
 
 def fixture(tmp_path):

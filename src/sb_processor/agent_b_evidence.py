@@ -7,7 +7,7 @@ import re
 from .agent_b_context import AgentBRequest
 from .models import (AliasRelation, ChangeReview, CheckStatus, IssueSeverity, IssueType,
                      ReviewCategory, ReviewStatus, SourceReference)
-from .registry import normalize
+from .knowledge.registry import normalize
 
 
 _ALSO_KNOWN_AS = re.compile(r"\b(?:also known as|also called|also referred to as)\b", re.IGNORECASE)
