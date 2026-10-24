@@ -1,5 +1,9 @@
 from sb_processor.review.validators import validate_change
 from sb_processor.models import Action, NoteChange, NoteMetadata, ReviewStatus
+from pathlib import Path
+import pytest
+from sb_processor.knowledge.vault import scan_vault
+from sb_processor.processing.staging import audit_wikilinks
 
 
 def change(content: str, note_type: str = "concept") -> NoteChange:
@@ -82,3 +86,17 @@ def test_map_disallows_source_specific_frontmatter():
     item = change("---\ntype: map\nsource_file: s.pdf\nlocation: /s.pdf\n---\n# A", "map")
     issues = validate_change(item, [], [])
     assert sum(issue.issue_type == "metadata" for issue in issues) == 2
+
+
+def test_historical_fixture_resolves_canonical_machine_learning_map_link():
+    vault = Path(__file__).resolve().parents[2] / "staging/agent_b_v11_original_vault_snapshot"
+    if not vault.is_dir():
+        pytest.skip("Historical local evaluation snapshot is unavailable")
+    notes = list(scan_vault(vault))
+    metadata = [NoteMetadata(path=n.path, filename=n.filename, title=n.title,
+                             note_type=n.note_type, aliases=n.aliases, maps=n.maps) for n in notes]
+    link = change("---\ntype: concept\n---\n# A\n[[Machine Learning - Map]]")
+    matches = audit_wikilinks([link], metadata)
+    assert matches[0]["status"] == "existing note"
+    assert matches[0]["resolved_path"] == "Atlas/Maps/Machine Learning - Map.md"
+    assert not (vault / "Atlas/Maps/Machine Learning.md").exists()
