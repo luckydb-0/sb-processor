@@ -41,6 +41,7 @@ python -m sb_processor ingest-pdf --source /path/to/lecture.pdf --vault ../gd-gd
 python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb
 python -m sb_processor process --workflow university --source /path/to/lecture.pdf --vault ../gd-gdb --with-agent-b
 python -m sb_processor review --run staging/run_<id> --vault ../gd-gdb
+python -m sb_processor reconcile --run staging/run_<id> --vault ../gd-gdb
 ```
 
 `scan` builds `.data/registry.sqlite`; `lookup` searches that database. `process` rebuilds SQLite, incrementally syncs the local vector index, and writes a proposal to `staging/run_<UTC timestamp>_<id>/`, never to the vault. Keep `--database`, `--semantic-index`, `--embedding-cache`, and `--staging` outside the vault. Review `review.md`, `proposal.json`, and the Markdown under `notes/` before manually using any draft.
@@ -49,9 +50,37 @@ The university workflow expects `University Templates.md` and `Agent A - Univers
 
 Agent B uses the existing `+ Inbox/Agent B - University Processing Review Instructions.md` in the selected vault. Use `review --instructions` or `process --agent-b-instructions` when the rules file is elsewhere. The `review` command operates on an existing staged Agent A run; `--with-agent-b` runs it immediately after Agent A. Agent B checks that the selected vault has the proposal's note count and original hashes for updated notes.
 
-Agent B saves `agent_b/review.json`, `agent_b/report.md`, `agent_b/requests/`, and `agent_b/diagnostics.json` beside the original `proposal.json` and `notes/`. Objective corrected Markdown, when supplied, goes under `agent_b/corrected_notes/`. The original proposal is preserved. Every proposed change receives `PASS`, `FIX`, or `REVIEW_REQUIRED`; the overall status is the highest intervention needed. The reviewer assesses aliases individually and Dot promotion for new Concept Notes. It receives selected source pages from Agent A's provenance and explicit note citations, related existing-note bodies, and original rendered PDF pages for selected visual evidence. Frontmatter, workflow contamination, and wikilinks are checked deterministically. There is no reconciliation or vault-apply stage.
+Agent B saves `agent_b/review.json`, `agent_b/report.md`, `agent_b/requests/`, and `agent_b/diagnostics.json` beside the original `proposal.json` and `notes/`. Objective corrected Markdown, when supplied, goes under `agent_b/corrected_notes/`. The original proposal is preserved. Every proposed change receives `PASS`, `FIX`, or `REVIEW_REQUIRED`; the overall status is the highest intervention needed. The reviewer assesses aliases individually and Dot promotion for new Concept Notes. It receives selected source pages from Agent A's provenance and explicit note citations, related existing-note bodies, and original rendered PDF pages for selected visual evidence. Frontmatter, workflow contamination, and wikilinks are checked deterministically. Reconciliation can prepare a validated change set, but there is still no vault-apply stage.
 
 The `review` command refuses to overwrite an existing `agent_b/` result. Archive or rename that folder before intentionally rerunning the review.
+
+## Reconciliation and human review
+
+After Agent B has reviewed a staged run, generate the reconciled change set:
+
+```bash
+python -m sb_processor reconcile --run staging/run_<id> --vault ../gd-gdb
+```
+
+The command applies only allow-listed objective corrections and exact, single-span semantic removals or replacements. Ambiguous issues become narrow machine-readable decisions. It writes only under `<run>/reconciliation/`:
+
+```text
+HUMAN_REVIEW.md
+human_decisions.json
+reconciliation.json
+final_change_set.json
+WRITE_PREVIEW.md
+diffs/
+```
+
+The normal workflow is:
+
+1. Open `HUMAN_REVIEW.md`.
+2. Put selected option keys in a separate JSON object, for example `{"HR-001": "DEFER"}`.
+3. Rerun with `--decisions decisions.json`.
+4. Inspect `WRITE_PREVIEW.md` and its UPDATE diffs.
+
+`PENDING_HUMAN_REVIEW` means at least one blocking choice remains. `READY_FOR_WRITE` means the selected write set has no pending decisions or deterministic validation errors; it does **not** mean any vault file was changed. `INVALID` means a structural/content validator or conflict gate failed. Skipped and deferred changes remain explicit and are excluded from the future write set. Reconciliation always starts from the preserved Agent A and Agent B artifacts, verifies their hashes while staging output, and never writes to the vault.
 
 ## PDF ingestion and extractor comparison
 
