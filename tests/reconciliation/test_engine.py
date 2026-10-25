@@ -135,7 +135,7 @@ def test_pending_decision_is_narrow_stable_and_blocks_final_state(tmp_path: Path
     assert decision.status is DecisionStatus.PENDING
     assert decision.question == "Should `Dots/Topic.md` keep the unresolved wikilink `[[Statistics]]`?"
     assert [option.key for option in decision.options] == [
-        "APPLY_RECONCILED_CHANGE", "SKIP_CHANGE", "DEFER"
+        "APPLY_RECONCILED_CHANGE", "REMOVE_LINK", "SKIP_CHANGE", "DEFER"
     ]
     assert result.final_change_set.unresolved_decision_ids == ["HR-001"]
     assert result.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
@@ -155,6 +155,90 @@ def test_resolved_decision_can_apply_reconciled_content_without_llm_reinterpreta
     assert "[[Statistics]]" in reconciled.final_content
     assert reconciled.human_decision_required is False
     assert result.final_change_set.unresolved_decision_ids == []
+
+
+def test_resolved_link_decision_can_remove_only_wikilink_markup(tmp_path: Path):
+    result = reconcile(unresolved_link_inputs(tmp_path), {"HR-001": "REMOVE_LINK"})
+
+    decision = result.final_change_set.human_decisions[0]
+    reconciled = result.final_change_set.changes[0]
+    assert decision.status is DecisionStatus.RESOLVED
+    assert decision.selected_option == "REMOVE_LINK"
+    assert reconciled.issues[0].outcome is IssueOutcome.APPLIED
+    assert "See Statistics." in reconciled.final_content
+    assert "[[Statistics]]" not in reconciled.final_content
+    assert reconciled.applied_fixes[-1].before == "[[Statistics]]"
+    assert reconciled.applied_fixes[-1].after == "Statistics"
+    assert result.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
+
+
+def test_remove_link_replaces_every_occurrence_of_one_exact_unresolved_link(tmp_path: Path):
+    inputs = unresolved_link_inputs(tmp_path)
+    inputs.reviewed_proposal.note_changes[0].content = (
+        "---\ntype: concept\n---\n# Topic\nSee [[Statistics]], then revisit [[Statistics]].\n"
+    )
+
+    result = reconcile(inputs, {"HR-001": "REMOVE_LINK"})
+
+    reconciled = result.final_change_set.changes[0]
+    assert reconciled.final_content.count("Statistics") == 2
+    assert "[[Statistics]]" not in reconciled.final_content
+    assert [patch.before for patch in reconciled.issues[0].patches] == [
+        "[[Statistics]]", "[[Statistics]]"
+    ]
+
+
+def test_remove_link_is_not_offered_when_one_decision_names_different_links(tmp_path: Path):
+    content = "---\ntype: concept\n---\n# Topic\nSee [[One]] and [[Two]].\n"
+    issues = [review_issue(
+        "Dots/Topic.md",
+        "link",
+        "Use verified canonical targets or remove the links",
+        explanation="Unresolved wikilink: [[One]] Unresolved wikilink: [[Two]]",
+    )]
+    inputs = loaded_inputs(
+        tmp_path,
+        [change(content=content)],
+        [reviewed_change("Dots/Topic.md", status="FIX", issue_indices=[0])],
+        issues,
+    )
+
+    result = reconcile(inputs)
+
+    assert "REMOVE_LINK" not in [
+        option.key for option in result.final_change_set.human_decisions[0].options
+    ]
+
+
+def test_local_link_removal_is_ordered_before_a_whole_change_defer(tmp_path: Path):
+    content = "---\ntype: concept\n---\n# Topic\nSee [[Statistics]].\n"
+    issues = [
+        review_issue(
+            "Dots/Topic.md",
+            "link",
+            "Use a verified canonical target or remove the link",
+            explanation="Unresolved wikilink: [[Statistics]]",
+        ),
+        review_issue(
+            "Dots/Topic.md",
+            "claim_strength",
+            "Confirm or remove the claim",
+            explanation="The claim is not fully supported by the supplied source.",
+        ),
+    ]
+    inputs = loaded_inputs(
+        tmp_path,
+        [change(content=content)],
+        [reviewed_change("Dots/Topic.md", status="FIX", issue_indices=[0, 1])],
+        issues,
+    )
+
+    result = reconcile(inputs, {"HR-002": "DEFER", "HR-001": "REMOVE_LINK"})
+
+    reconciled = result.final_change_set.changes[0]
+    assert reconciled.status is ReconciledChangeStatus.DEFERRED
+    assert reconciled.issues[0].outcome is IssueOutcome.APPLIED
+    assert reconciled.final_content is None
 
 
 def test_resolved_decision_can_skip_change(tmp_path: Path):
@@ -296,3 +380,106 @@ def test_resolved_preservation_decision_allows_ready_state_with_audited_warning(
     assert result.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
     assert result.final_change_set.unresolved_decision_ids == []
     assert {item.code for item in result.final_change_set.validation_findings} == {"UPDATE_PARAGRAPH_LOSS"}
+
+
+def test_link_to_blocked_change_is_exposed_as_dependent_human_decision(tmp_path: Path):
+    blocked = change(
+        path="Dots/Blocked Target.md",
+        action="REVIEW_REQUIRED",
+        content="---\ntype: concept\n---\n# Blocked Target\nDraft.\n",
+    )
+    dependent = change(
+        path="Dots/Dependent.md",
+        content="---\ntype: concept\n---\n# Dependent\nSee [[Blocked Target]].\n",
+    )
+    inputs = loaded_inputs(
+        tmp_path,
+        [blocked, dependent],
+        [
+            reviewed_change("Dots/Blocked Target.md", status="REVIEW_REQUIRED"),
+            reviewed_change("Dots/Dependent.md"),
+        ],
+    )
+
+    pending = reconcile(inputs)
+    resolved = reconcile(inputs, {"HR-001": "DEFER", "HR-002": "DEFER"})
+
+    assert [item.id for item in pending.final_change_set.human_decisions] == ["HR-001", "HR-002"]
+    assert pending.final_change_set.human_decisions[1].change_ids == ["RC-002"]
+    assert "[[Blocked Target]]" in pending.final_change_set.human_decisions[1].question
+    assert pending.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
+    assert resolved.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
+    assert resolved.final_change_set.changes[1].status is ReconciledChangeStatus.DEFERRED
+
+
+def test_blocked_link_gets_its_own_decision_when_change_already_has_another_link_issue(
+        tmp_path: Path):
+    blocked = change(
+        path="Dots/Blocked Target.md",
+        action="REVIEW_REQUIRED",
+        content="---\ntype: concept\n---\n# Blocked Target\nDraft.\n",
+    )
+    dependent = change(
+        path="Dots/Dependent.md",
+        content=(
+            "---\ntype: concept\n---\n# Dependent\n"
+            "See [[Unknown Target]] and [[Blocked Target]].\n"
+        ),
+    )
+    issues = [review_issue(
+        "Dots/Dependent.md",
+        "link",
+        "Use a verified canonical target or remove the link",
+        explanation="Unresolved wikilink: [[Unknown Target]]",
+    )]
+    inputs = loaded_inputs(
+        tmp_path,
+        [blocked, dependent],
+        [
+            reviewed_change("Dots/Blocked Target.md", status="REVIEW_REQUIRED"),
+            reviewed_change("Dots/Dependent.md", status="FIX", issue_indices=[0]),
+        ],
+        issues,
+    )
+
+    pending = reconcile(inputs)
+
+    dependent_decisions = [
+        item for item in pending.final_change_set.human_decisions
+        if item.change_ids == ["RC-002"]
+    ]
+    assert [item.id for item in dependent_decisions] == ["HR-002", "HR-003"]
+    assert "[[Unknown Target]]" in dependent_decisions[0].question
+    assert "[[Blocked Target]]" in dependent_decisions[1].question
+
+
+def test_dependency_decisions_do_not_cascade_through_still_pending_creates(tmp_path: Path):
+    root = change(
+        path="Dots/Root.md",
+        action="REVIEW_REQUIRED",
+        content="---\ntype: concept\n---\n# Root\nDraft.\n",
+    )
+    middle = change(
+        path="Dots/Middle.md",
+        content="---\ntype: concept\n---\n# Middle\nSee [[Root]].\n",
+    )
+    leaf = change(
+        path="Dots/Leaf.md",
+        content="---\ntype: concept\n---\n# Leaf\nSee [[Middle]].\n",
+    )
+    inputs = loaded_inputs(
+        tmp_path,
+        [root, middle, leaf],
+        [
+            reviewed_change("Dots/Root.md", status="REVIEW_REQUIRED"),
+            reviewed_change("Dots/Middle.md"),
+            reviewed_change("Dots/Leaf.md"),
+        ],
+    )
+
+    pending = reconcile(inputs)
+
+    assert [item.change_ids for item in pending.final_change_set.human_decisions] == [
+        ["RC-001"], ["RC-002"]
+    ]
+    assert pending.final_change_set.changes[2].human_decision_ids == []

@@ -82,6 +82,8 @@ The normal workflow is:
 
 `PENDING_HUMAN_REVIEW` means at least one blocking choice remains. `READY_FOR_WRITE` means the selected write set has no pending decisions or deterministic validation errors; it does **not** mean any vault file was changed. `INVALID` means a structural/content validator or conflict gate failed. Skipped and deferred changes remain explicit and are excluded from the future write set. Reconciliation always starts from the preserved Agent A and Agent B artifacts, verifies their hashes while staging output, and never writes to the vault.
 
+For an unresolved exact wikilink, `REMOVE_LINK` removes only the `[[...]]` markup and preserves its visible text; it never invents a replacement target. The [v1 evaluation](docs/reconciliation-v1-evaluation.md) records the frozen-fixture lifecycle, hashes, validation evidence, and freeze recommendation.
+
 ## PDF ingestion and extractor comparison
 
 Inspect extraction and visual-page detection without generating a note proposal:

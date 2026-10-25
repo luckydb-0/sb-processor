@@ -114,6 +114,15 @@ def _alias_fix(issue: ReviewIssue, content: str, existing_content: str | None) -
                        "The alias is not represented by one removable list item")
     start = match.start(1) + item.start()
     end = match.start(1) + item.end()
+    if aliases == [alias]:
+        header_matches = list(re.finditer(
+            r"(?m)^aliases:[ \t]*(?:\r?\n|$)",
+            content[match.start(1):start],
+        ))
+        if not header_matches:
+            return _result(content, IssueClassification.OBJECTIVE, IssueOutcome.HUMAN_REQUIRED,
+                           "The only alias is not under a removable aliases field")
+        start = match.start(1) + header_matches[-1].start()
     patch = PatchOperation(kind=PatchKind.REMOVE, start=start, end=end,
                            before=content[start:end], after="")
     return _result(content, IssueClassification.OBJECTIVE, IssueOutcome.APPLIED,

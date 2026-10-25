@@ -36,8 +36,23 @@ def _metadata(inputs: ReconciliationInputs) -> list[NoteMetadata]:
     ) for note in inputs.vault_notes]
 
 
-def _as_note_change(inputs: ReconciliationInputs, change: ReconciledChange) -> NoteChange | None:
-    if change.final_action not in (Action.CREATE, Action.UPDATE) or change.final_content is None:
+def _dependency_only_blocked(change: ReconciledChange) -> bool:
+    pending_issues = [issue for issue in change.issues if issue.human_decision_id]
+    return (
+        change.status is ReconciledChangeStatus.BLOCKED
+        and bool(pending_issues)
+        and all(issue.agent_b_issue_index == -1 and issue.issue_type.value == "link"
+                for issue in pending_issues)
+    )
+
+
+def _as_note_change(inputs: ReconciliationInputs, change: ReconciledChange,
+                    *, allow_blocked: bool = False) -> NoteChange | None:
+    if ((not allow_blocked
+         and change.status in (ReconciledChangeStatus.BLOCKED, ReconciledChangeStatus.DEFERRED)
+         and not _dependency_only_blocked(change))
+            or change.final_action not in (Action.CREATE, Action.UPDATE)
+            or change.final_content is None):
         return None
     source = inputs.reviewed_proposal.note_changes[change.agent_a_change_index]
     return NoteChange(
@@ -51,6 +66,57 @@ def _as_note_change(inputs: ReconciliationInputs, change: ReconciledChange) -> N
         candidate_existing_notes=source.candidate_existing_notes,
         original_content_hash=source.original_content_hash,
     )
+
+
+def _blocked_identities(inputs: ReconciliationInputs,
+                        changes: list[ReconciledChange]) -> set[str]:
+    identities: set[str] = set()
+    for item in changes:
+        if item.status not in (ReconciledChangeStatus.BLOCKED, ReconciledChangeStatus.DEFERRED):
+            continue
+        if _dependency_only_blocked(item):
+            continue
+        source = inputs.reviewed_proposal.note_changes[item.agent_a_change_index]
+        path = PurePosixPath(item.final_target_path or item.original_target_path)
+        identities.update({
+            normalize(source.title),
+            normalize(path.stem),
+            normalize(path.with_suffix("").as_posix()),
+        })
+    return identities
+
+
+def find_blocked_link_dependencies(inputs: ReconciliationInputs,
+                                   changes: list[ReconciledChange]) -> list[ValidationFinding]:
+    """Find links in blocked changes that would break if their targets stay blocked."""
+    metadata = _metadata(inputs)
+    blocked_identities = _blocked_identities(inputs, changes)
+    active = [
+        note_change
+        for item in changes
+        if (note_change := _as_note_change(inputs, item)) is not None
+    ]
+    findings: list[ValidationFinding] = []
+    for item in changes:
+        if item.status is not ReconciledChangeStatus.BLOCKED:
+            continue
+        note_change = _as_note_change(inputs, item, allow_blocked=True)
+        if note_change is None:
+            continue
+        for issue in validate_change(note_change, metadata, active):
+            if issue.issue_type.value != "link":
+                continue
+            match = re.search(r"Unresolved wikilink: \[\[([^\]]+)\]\]", issue.explanation)
+            if not match:
+                continue
+            target = normalize(match.group(1).split("|", 1)[0].split("#", 1)[0])
+            if target in blocked_identities:
+                findings.append(_finding(
+                    "LINK_TO_BLOCKED_CHANGE",
+                    issue.explanation,
+                    item.id,
+                ))
+    return findings
 
 
 _FRONTMATTER = re.compile(r"\A---\s*\r?\n.*?\r?\n---(?:\r?\n|\Z)", re.DOTALL)
@@ -176,6 +242,7 @@ def validate_final_changes(inputs: ReconciliationInputs,
     metadata = _metadata(inputs)
     materialized = [(item, _as_note_change(inputs, item)) for item in changes]
     note_changes = [item for _, item in materialized if item is not None]
+    blocked_identities = _blocked_identities(inputs, changes)
 
     for reconciled, note_change in materialized:
         if reconciled.status in (ReconciledChangeStatus.BLOCKED, ReconciledChangeStatus.DEFERRED):
@@ -207,8 +274,13 @@ def validate_final_changes(inputs: ReconciliationInputs,
             continue
         other = [item for item in note_changes if item is not note_change]
         for issue in validate_change(note_change, metadata, other):
+            code = issue.issue_type.value.upper()
+            if issue.issue_type.value == "link":
+                match = re.search(r"Unresolved wikilink: \[\[([^\]]+)\]\]", issue.explanation)
+                if match and normalize(match.group(1).split("|", 1)[0].split("#", 1)[0]) in blocked_identities:
+                    code = "LINK_TO_BLOCKED_CHANGE"
             findings.append(_finding(
-                issue.issue_type.value.upper(),
+                code,
                 issue.explanation,
                 reconciled.id,
             ))

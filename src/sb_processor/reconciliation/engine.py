@@ -20,9 +20,11 @@ from .models import (
     ReconciledChangeStatus,
     ReconciledIssue,
     ReconciliationResult,
+    PatchKind,
+    PatchOperation,
     ValidationSeverity,
 )
-from .validators import validate_final_changes
+from .validators import find_blocked_link_dependencies, validate_final_changes
 
 
 RECONCILIATION_VERSION = "reconciliation-v1"
@@ -43,11 +45,19 @@ def _known_targets(inputs: ReconciliationInputs) -> set[str]:
     return paths
 
 
+def _unresolved_link_tokens(explanation: str) -> list[str]:
+    return list(dict.fromkeys(re.findall(
+        r"Unresolved wikilink: (\[\[[^\]]+\]\])",
+        explanation,
+    )))
+
+
 def _decision(decision_id: str, change_id: str, issue: ReconciledIssue,
               change: NoteChange) -> HumanDecision:
-    unresolved_link = re.search(r"Unresolved wikilink: (\[\[[^\]]+\]\])", issue.explanation)
+    unresolved_links = _unresolved_link_tokens(issue.explanation)
+    unresolved_link = unresolved_links[0] if len(unresolved_links) == 1 else None
     if unresolved_link:
-        question = f"Should `{change.target_path}` keep the unresolved wikilink `{unresolved_link.group(1)}`?"
+        question = f"Should `{change.target_path}` keep the unresolved wikilink `{unresolved_link}`?"
     elif issue.issue_type.value == "alias":
         question = f"Should `{change.target_path}` keep the alias questioned by Agent B?"
     elif issue.issue_type.value in ("concept_boundary", "existing_note"):
@@ -56,6 +66,20 @@ def _decision(decision_id: str, change_id: str, issue: ReconciledIssue,
         question = f"Should `{change.target_path}` proceed even though it does not preserve all existing useful content?"
     else:
         question = f"Should `{change.target_path}` proceed with this unresolved {issue.issue_type.value} issue?"
+    options = [
+        DecisionOption(key="APPLY_RECONCILED_CHANGE", label="Apply the staged change",
+                       effect=DecisionEffect.APPLY_RECONCILED_CHANGE),
+    ]
+    if unresolved_link and unresolved_link in change.content:
+        options.append(DecisionOption(
+            key="REMOVE_LINK",
+            label="Remove only the wikilink markup",
+            effect=DecisionEffect.REMOVE_LINK,
+        ))
+    options.extend([
+        DecisionOption(key="SKIP_CHANGE", label="Skip this change", effect=DecisionEffect.SKIP_CHANGE),
+        DecisionOption(key="DEFER", label="Defer this change", effect=DecisionEffect.DEFER),
+    ])
     return HumanDecision(
         id=decision_id,
         change_ids=[change_id],
@@ -69,13 +93,37 @@ def _decision(decision_id: str, change_id: str, issue: ReconciledIssue,
         recommendation="DEFER",
         rationale="The correction is not deterministic enough for automatic application.",
         confidence="low",
-        options=[
-            DecisionOption(key="APPLY_RECONCILED_CHANGE", label="Apply the staged change",
-                           effect=DecisionEffect.APPLY_RECONCILED_CHANGE),
-            DecisionOption(key="SKIP_CHANGE", label="Skip this change", effect=DecisionEffect.SKIP_CHANGE),
-            DecisionOption(key="DEFER", label="Defer this change", effect=DecisionEffect.DEFER),
-        ],
+        options=options,
     )
+
+
+def _remove_unresolved_link(reconciled: ReconciledChange, issue: ReconciledIssue) -> None:
+    tokens = _unresolved_link_tokens(issue.explanation)
+    if len(tokens) != 1 or reconciled.final_content is None:
+        raise ValueError(f"Decision {issue.human_decision_id} has no removable wikilink")
+    token = tokens[0]
+    positions = [match.start() for match in re.finditer(re.escape(token), reconciled.final_content)]
+    if not positions:
+        raise ValueError(
+            f"Decision {issue.human_decision_id} wikilink is not removable: {token}"
+        )
+    inner = token[2:-2]
+    visible = inner.split("|", 1)[1] if "|" in inner else inner.split("#", 1)[0]
+    patches = [
+        PatchOperation(
+            kind=PatchKind.REPLACE,
+            start=start,
+            end=start + len(token),
+            before=token,
+            after=visible,
+        )
+        for start in positions
+    ]
+    reconciled.final_content = reconciled.final_content.replace(token, visible)
+    reconciled.final_content_sha256 = _sha256_text(reconciled.final_content)
+    reconciled.applied_fixes.extend(patches)
+    issue.patches.extend(patches)
+    issue.outcome = IssueOutcome.APPLIED
 
 
 def _initial_final_action(change: NoteChange) -> Action | None:
@@ -215,26 +263,79 @@ def reconcile(inputs: ReconciliationInputs,
         source = inputs.reviewed_proposal.note_changes[reconciled.agent_a_change_index]
         decisions.append(_decision(decision_id, change_id, synthetic, source))
 
+    while True:
+        added_dependency = False
+        dependency_findings = [
+            *validate_final_changes(inputs, reconciled_changes),
+            *find_blocked_link_dependencies(inputs, reconciled_changes),
+        ]
+        for finding in dependency_findings:
+            if finding.code != "LINK_TO_BLOCKED_CHANGE":
+                continue
+            finding_tokens = _unresolved_link_tokens(finding.message)
+            if len(finding_tokens) != 1:
+                continue
+            finding_token = finding_tokens[0]
+            for change_id in finding.change_ids:
+                reconciled = change_by_id[change_id]
+                covered_tokens = {
+                    token
+                    for issue in reconciled.issues
+                    if issue.human_decision_id
+                    for token in _unresolved_link_tokens(issue.explanation)
+                }
+                if finding_token in covered_tokens:
+                    continue
+                decision_number += 1
+                decision_id = f"HR-{decision_number:03d}"
+                issue_id = f"{change_id}-I{len(reconciled.issues) + 1:02d}"
+                synthetic = ReconciledIssue(
+                    id=issue_id,
+                    agent_b_issue_index=-1,
+                    issue_type="link",
+                    explanation=finding.message,
+                    proposed_correction="Resolve the target decision or remove this exact link",
+                    classification=IssueClassification.AMBIGUOUS,
+                    outcome=IssueOutcome.HUMAN_REQUIRED,
+                    human_decision_id=decision_id,
+                )
+                reconciled.issues.append(synthetic)
+                reconciled.human_decision_ids.append(decision_id)
+                reconciled.human_decision_required = True
+                reconciled.status = ReconciledChangeStatus.BLOCKED
+                source = inputs.reviewed_proposal.note_changes[reconciled.agent_a_change_index]
+                decisions.append(_decision(decision_id, change_id, synthetic, source))
+                added_dependency = True
+        if not added_dependency:
+            break
+
     decision_by_id = {item.id: item for item in decisions}
     unknown = sorted(set(selections) - set(decision_by_id))
     if unknown:
         raise ValueError(f"Unknown decision IDs: {', '.join(unknown)}")
     selected_effects_by_change: dict[str, set[DecisionEffect]] = {}
+    selection_options: dict[str, DecisionOption] = {}
     for decision_id, selected in selections.items():
         decision = decision_by_id[decision_id]
         option = next((item for item in decision.options if item.key == selected), None)
         if option is None:
             raise ValueError(f"Invalid option for {decision_id}: {selected}")
-        for change_id in decision.change_ids:
-            selected_effects_by_change.setdefault(change_id, set()).add(option.effect)
+        selection_options[decision_id] = option
+        if option.effect is not DecisionEffect.REMOVE_LINK:
+            for change_id in decision.change_ids:
+                selected_effects_by_change.setdefault(change_id, set()).add(option.effect)
     conflicting = sorted(change_id for change_id, effects in selected_effects_by_change.items()
                          if len(effects) > 1)
     if conflicting:
         raise ValueError(f"Conflicting decision effects for changes: {', '.join(conflicting)}")
 
-    for decision_id, selected in selections.items():
+    ordered_selections = sorted(
+        selections.items(),
+        key=lambda item: selection_options[item[0]].effect is not DecisionEffect.REMOVE_LINK,
+    )
+    for decision_id, selected in ordered_selections:
         decision = decision_by_id[decision_id]
-        option = next(item for item in decision.options if item.key == selected)
+        option = selection_options[decision_id]
         decision.selected_option = selected
         decision.status = (DecisionStatus.DEFERRED if option.effect is DecisionEffect.DEFER
                            else DecisionStatus.RESOLVED)
@@ -243,10 +344,13 @@ def reconcile(inputs: ReconciliationInputs,
             for reconciled_issue in reconciled.issues:
                 if reconciled_issue.id not in decision.issue_ids:
                     continue
-                reconciled_issue.outcome = (
-                    IssueOutcome.DEFERRED if option.effect is DecisionEffect.DEFER
-                    else IssueOutcome.SKIPPED_WITH_HUMAN_APPROVAL
-                )
+                if option.effect is DecisionEffect.REMOVE_LINK:
+                    _remove_unresolved_link(reconciled, reconciled_issue)
+                else:
+                    reconciled_issue.outcome = (
+                        IssueOutcome.DEFERRED if option.effect is DecisionEffect.DEFER
+                        else IssueOutcome.SKIPPED_WITH_HUMAN_APPROVAL
+                    )
             if option.effect is DecisionEffect.APPLY_RECONCILED_CHANGE:
                 if reconciled.original_action is Action.REVIEW_REQUIRED:
                     target = inputs.vault / reconciled.original_target_path
@@ -256,6 +360,8 @@ def reconcile(inputs: ReconciliationInputs,
                 if reconciled.final_action in (Action.CREATE, Action.UPDATE):
                     assert reconciled.final_content is not None
                     reconciled.final_content_sha256 = _sha256_text(reconciled.final_content)
+            elif option.effect is DecisionEffect.REMOVE_LINK:
+                pass
             elif option.effect is DecisionEffect.SKIP_CHANGE:
                 reconciled.final_action = Action.NO_CHANGE
                 reconciled.final_content = None

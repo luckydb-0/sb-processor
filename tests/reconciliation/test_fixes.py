@@ -77,6 +77,17 @@ def test_objective_alias_refuses_to_remove_preexisting_alias():
     assert result.patches == []
 
 
+def test_objective_alias_removal_does_not_leave_null_aliases_field():
+    content = "---\ntype: concept\naliases:\n  - Only Alias\nmaps: []\n---\n# Topic\n"
+    finding = issue("alias", "Remove alias 'Only Alias' from frontmatter")
+
+    result = classify_and_apply_fix(note_change(content), finding, content, None)
+
+    assert result.outcome is IssueOutcome.APPLIED
+    assert "aliases:" not in result.content
+    assert "maps: []" in result.content
+
+
 def test_objective_link_replaces_explicit_resolved_canonical_target():
     content = "---\ntype: concept\n---\n# Topic\nSee [[Statistics]].\n"
     finding = issue(

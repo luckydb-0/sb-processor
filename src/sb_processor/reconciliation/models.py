@@ -97,6 +97,7 @@ class ReconciledChange(StrictModel):
 
 class DecisionEffect(str, Enum):
     APPLY_RECONCILED_CHANGE = "APPLY_RECONCILED_CHANGE"
+    REMOVE_LINK = "REMOVE_LINK"
     SKIP_CHANGE = "SKIP_CHANGE"
     DEFER = "DEFER"
 
