@@ -46,6 +46,19 @@ def review(changes: list[dict], *, issues: list[dict] | None = None, overall_sta
     }
 
 
+def review_issue(path: str, kind: str, correction: str, *, explanation: str = "Needs correction") -> dict:
+    return {
+        "change_path": path,
+        "issue_type": kind,
+        "severity": "medium",
+        "explanation": explanation,
+        "proposed_correction": correction,
+        "source_pages": [],
+        "evidence_refs": [],
+        "corrected_content": None,
+    }
+
+
 def write_run(run: Path, reviewed_proposal: dict, review_result: dict,
               *, original_proposal: dict | None = None, agent_a_matches: bool = True) -> None:
     run.mkdir(parents=True)
