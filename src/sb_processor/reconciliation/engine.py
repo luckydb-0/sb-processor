@@ -15,11 +15,14 @@ from .models import (
     FinalChangeSetState,
     HumanDecision,
     IssueOutcome,
+    IssueClassification,
     ReconciledChange,
     ReconciledChangeStatus,
     ReconciledIssue,
     ReconciliationResult,
+    ValidationSeverity,
 )
+from .validators import validate_final_changes
 
 
 RECONCILIATION_VERSION = "reconciliation-v1"
@@ -49,6 +52,8 @@ def _decision(decision_id: str, change_id: str, issue: ReconciledIssue,
         question = f"Should `{change.target_path}` keep the alias questioned by Agent B?"
     elif issue.issue_type.value in ("concept_boundary", "existing_note"):
         question = f"Should `{change.target_path}` be applied as the separate change Agent A proposed?"
+    elif issue.issue_type.value == "cumulative_integrity":
+        question = f"Should `{change.target_path}` proceed even though it does not preserve all existing useful content?"
     else:
         question = f"Should `{change.target_path}` proceed with this unresolved {issue.issue_type.value} issue?"
     return HumanDecision(
@@ -176,11 +181,44 @@ def reconcile(inputs: ReconciliationInputs,
             status=status,
         ))
 
+    preliminary_findings = validate_final_changes(inputs, reconciled_changes)
+    preservation_by_change: dict[str, list] = {}
+    for finding in preliminary_findings:
+        if finding.severity is not ValidationSeverity.WARNING or not finding.code.startswith("UPDATE_"):
+            continue
+        for change_id in finding.change_ids:
+            preservation_by_change.setdefault(change_id, []).append(finding)
+    change_by_id = {item.id: item for item in reconciled_changes}
+    for change_id, findings in preservation_by_change.items():
+        reconciled = change_by_id[change_id]
+        if any(issue.issue_type.value in ("cumulative_integrity", "existing_note")
+               and issue.human_decision_id for issue in reconciled.issues):
+            continue
+        decision_number += 1
+        decision_id = f"HR-{decision_number:03d}"
+        issue_id = f"{change_id}-I{len(reconciled.issues) + 1:02d}"
+        explanation = " ".join(finding.message for finding in findings)
+        synthetic = ReconciledIssue(
+            id=issue_id,
+            agent_b_issue_index=-1,
+            issue_type="cumulative_integrity",
+            explanation=explanation,
+            proposed_correction="Confirm the content loss, skip the change, or defer it",
+            classification=IssueClassification.AMBIGUOUS,
+            outcome=IssueOutcome.HUMAN_REQUIRED,
+            human_decision_id=decision_id,
+        )
+        reconciled.issues.append(synthetic)
+        reconciled.human_decision_ids.append(decision_id)
+        reconciled.human_decision_required = True
+        reconciled.status = ReconciledChangeStatus.BLOCKED
+        source = inputs.reviewed_proposal.note_changes[reconciled.agent_a_change_index]
+        decisions.append(_decision(decision_id, change_id, synthetic, source))
+
     decision_by_id = {item.id: item for item in decisions}
     unknown = sorted(set(selections) - set(decision_by_id))
     if unknown:
         raise ValueError(f"Unknown decision IDs: {', '.join(unknown)}")
-    change_by_id = {item.id: item for item in reconciled_changes}
     selected_effects_by_change: dict[str, set[DecisionEffect]] = {}
     for decision_id, selected in selections.items():
         decision = decision_by_id[decision_id]
@@ -242,7 +280,13 @@ def reconcile(inputs: ReconciliationInputs,
         else:
             reconciled.status = ReconciledChangeStatus.READY
 
+    final_findings = validate_final_changes(inputs, reconciled_changes)
+    for reconciled in reconciled_changes:
+        reconciled.validation_findings = [item for item in final_findings if reconciled.id in item.change_ids]
+        if any(item.severity is ValidationSeverity.ERROR for item in reconciled.validation_findings):
+            reconciled.status = ReconciledChangeStatus.INVALID
     unresolved = [item.id for item in decisions if item.status is DecisionStatus.PENDING]
+    has_errors = any(item.severity is ValidationSeverity.ERROR for item in final_findings)
     final = FinalChangeSet(
         source_run_id=inputs.run.name,
         reconciliation_version=RECONCILIATION_VERSION,
@@ -252,8 +296,9 @@ def reconcile(inputs: ReconciliationInputs,
         changes=reconciled_changes,
         human_decisions=decisions,
         unresolved_decision_ids=unresolved,
-        validation_findings=[],
-        state=(FinalChangeSetState.PENDING_HUMAN_REVIEW if unresolved
+        validation_findings=final_findings,
+        state=(FinalChangeSetState.INVALID if has_errors
+               else FinalChangeSetState.PENDING_HUMAN_REVIEW if unresolved
                else FinalChangeSetState.READY_FOR_WRITE),
     )
     return ReconciliationResult(final_change_set=final)

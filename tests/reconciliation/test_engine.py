@@ -63,6 +63,7 @@ def test_fix_applies_objective_and_exact_semantic_patches_in_issue_order(tmp_pat
         [change(content=content)],
         [reviewed_change("Dots/Topic.md", status="FIX", issue_indices=[0, 1])],
         issues,
+        vault_contents={"Sources/Lecture 01.md": "---\ntype: lecture\n---\n# Lecture 01\n"},
     )
 
     result = reconcile(inputs)
@@ -225,3 +226,73 @@ def test_decision_resolution_rejects_unknown_ids_and_options(tmp_path: Path):
         assert "Invalid option for HR-001" in str(error)
     else:
         raise AssertionError("unknown decision option should fail")
+
+
+def test_complete_valid_run_is_ready_for_write(tmp_path: Path):
+    inputs = loaded_inputs(tmp_path, [change()], [reviewed_change("Dots/Topic.md")])
+
+    result = reconcile(inputs)
+
+    assert result.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
+    assert result.final_change_set.validation_findings == []
+
+
+def test_final_validation_error_makes_change_set_invalid(tmp_path: Path):
+    invalid = "---\ntype: map\n---\n# Topic\nWrong type.\n"
+    inputs = loaded_inputs(tmp_path, [change(content=invalid)], [reviewed_change("Dots/Topic.md")])
+
+    result = reconcile(inputs)
+
+    assert result.final_change_set.state is FinalChangeSetState.INVALID
+    assert result.final_change_set.changes[0].status is ReconciledChangeStatus.INVALID
+    assert {item.code for item in result.final_change_set.validation_findings} == {"METADATA"}
+
+
+def test_pending_change_is_not_invalidated_by_the_issue_waiting_for_human_decision(tmp_path: Path):
+    result = reconcile(unresolved_link_inputs(tmp_path))
+
+    assert result.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
+    assert not [item for item in result.final_change_set.validation_findings
+                if item.severity.value == "ERROR"]
+
+
+def test_update_paragraph_loss_generates_preservation_decision(tmp_path: Path):
+    existing = (
+        "---\ntype: concept\n---\n# Topic\n\n"
+        "This useful existing paragraph contains durable knowledge that should not silently disappear.\n"
+    )
+    final = "---\ntype: concept\n---\n# Topic\n\nReplacement.\n"
+    inputs = loaded_inputs(
+        tmp_path,
+        [change(content=final, action="UPDATE")],
+        [reviewed_change("Dots/Topic.md")],
+        vault_contents={"Dots/Topic.md": existing},
+    )
+
+    result = reconcile(inputs)
+
+    decision = result.final_change_set.human_decisions[0]
+    assert decision.id == "HR-001"
+    assert decision.category == "cumulative_integrity"
+    assert "preserve" in decision.question.casefold()
+    assert result.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
+
+
+def test_resolved_preservation_decision_allows_ready_state_with_audited_warning(tmp_path: Path):
+    existing = (
+        "---\ntype: concept\n---\n# Topic\n\n"
+        "This useful existing paragraph contains durable knowledge that should not silently disappear.\n"
+    )
+    final = "---\ntype: concept\n---\n# Topic\n\nReplacement.\n"
+    inputs = loaded_inputs(
+        tmp_path,
+        [change(content=final, action="UPDATE")],
+        [reviewed_change("Dots/Topic.md")],
+        vault_contents={"Dots/Topic.md": existing},
+    )
+
+    result = reconcile(inputs, {"HR-001": "APPLY_RECONCILED_CHANGE"})
+
+    assert result.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
+    assert result.final_change_set.unresolved_decision_ids == []
+    assert {item.code for item in result.final_change_set.validation_findings} == {"UPDATE_PARAGRAPH_LOSS"}
