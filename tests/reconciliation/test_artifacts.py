@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
-from sb_processor.reconciliation.artifacts import stage_reconciliation
+import pytest
+
+from sb_processor.reconciliation.artifacts import run_reconciliation, stage_reconciliation
 from sb_processor.reconciliation.engine import reconcile
 from sb_processor.reconciliation.inputs import load_reconciliation_inputs
 
@@ -19,7 +22,8 @@ def artifact_fixture(tmp_path: Path):
     updated = existing + "\nA new supported sentence.\n"
     changes = [
         change(path="Dots/New Topic.md", content="---\ntype: concept\n---\n# New Topic\nNew body.\n"),
-        change(path="Dots/Existing.md", action="UPDATE", content=updated),
+        change(path="Dots/Existing.md", action="UPDATE", content=updated,
+               original_content_hash=hashlib.sha256(existing.encode()).hexdigest()),
         change(path="Dots/Blocked.md", content=(
             "---\ntype: concept\n---\n# Blocked\nSee [[Missing]].\n"
         )),
@@ -88,6 +92,19 @@ def test_human_review_is_concise_and_contains_machine_matching_decisions(tmp_pat
     ]
 
 
+def test_resolved_human_review_lists_only_pending_decisions(tmp_path: Path):
+    run, inputs, _ = artifact_fixture(tmp_path)
+    result = reconcile(inputs, {"HR-001": "DEFER"})
+
+    output = stage_reconciliation(run, result, inputs)
+
+    markdown = (output / "HUMAN_REVIEW.md").read_text(encoding="utf-8")
+    assert "Needs your decision: 0" in markdown
+    assert "Resolved or deferred decisions: 1" in markdown
+    assert "### HR-001" not in markdown
+    assert "human_decisions.json" in markdown
+
+
 def test_write_preview_groups_actions_and_links_stable_update_diff(tmp_path: Path):
     run, inputs, result = artifact_fixture(tmp_path)
 
@@ -115,3 +132,28 @@ def test_json_artifacts_share_the_same_final_change_set_state(tmp_path: Path):
     final = json.loads((output / "final_change_set.json").read_text(encoding="utf-8"))
     assert reconciliation["final_change_set"] == final
     assert final["state"] == "PENDING_HUMAN_REVIEW"
+
+
+def test_decision_file_path_and_hash_are_preserved_in_final_provenance(tmp_path: Path):
+    run, inputs, _ = artifact_fixture(tmp_path)
+    decisions = tmp_path / "decisions.json"
+    decisions.write_text(json.dumps({"HR-001": "DEFER"}) + "\n", encoding="utf-8")
+
+    final = run_reconciliation(run, inputs.vault, decisions)
+
+    assert final.provenance["human_decisions"] == str(decisions.resolve())
+    assert final.input_sha256["human_decisions.json"] == hashlib.sha256(
+        decisions.read_bytes()
+    ).hexdigest()
+
+
+def test_staging_rejects_update_target_changed_after_reconciliation(tmp_path: Path):
+    run, inputs, result = artifact_fixture(tmp_path)
+    write_note(
+        inputs.vault,
+        "Dots/Existing.md",
+        "---\ntype: concept\n---\n# Existing\nChanged after reconciliation.\n",
+    )
+
+    with pytest.raises(ValueError, match="Vault UPDATE target changed"):
+        stage_reconciliation(run, result, inputs)

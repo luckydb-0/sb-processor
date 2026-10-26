@@ -81,6 +81,7 @@ class ReconciledChange(StrictModel):
     original_action: Action
     original_target_path: str
     original_content_sha256: str
+    expected_existing_content_sha256: str | None = None
     agent_b_status: ReviewStatus
     agent_b_issue_indices: list[int] = Field(default_factory=list)
     issues: list[ReconciledIssue] = Field(default_factory=list)

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from pydantic import Field
 
 from ..knowledge.vault import scan_vault
-from ..models import ProcessingProposal, ReviewResult, ScannedNote, StrictModel
+from ..models import ProcessingProposal, ReviewResult, ReviewStatus, ScannedNote, StrictModel
 from .models import PreReviewAdjustment
 
 
@@ -21,6 +21,23 @@ class ReconciliationInputs(StrictModel):
     provenance: dict[str, str]
     input_sha256: dict[str, str]
     pre_review_adjustments: list[PreReviewAdjustment] = Field(default_factory=list)
+    decision_input_path: Path | None = None
+
+
+def resolve_vault_target(vault: Path, target: str) -> Path | None:
+    """Resolve a vault-relative Markdown target without following an escape."""
+    if not target or "\\" in target or not target.endswith(".md"):
+        return None
+    relative = PurePosixPath(target)
+    if relative.is_absolute() or any(part in ("", ".", "..") for part in relative.parts):
+        return None
+    root = Path(vault).resolve(strict=True)
+    candidate = root.joinpath(*relative.parts)
+    try:
+        resolved = candidate.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return None
+    return candidate if resolved.is_relative_to(root) else None
 
 
 def _sha256(path: Path) -> str:
@@ -75,6 +92,30 @@ def load_reconciliation_inputs(run: Path, vault: Path) -> ReconciliationInputs:
         raise ValueError("Duplicate change paths prevent Agent A/Agent B alignment")
     if set(proposal_paths) != set(review_paths):
         raise ValueError("Agent B change paths do not match the reviewed Agent A proposal")
+    claimed_issue_indices: set[int] = set()
+    for reviewed_change in review.reviewed_changes:
+        if reviewed_change.status is ReviewStatus.FIX and not reviewed_change.issue_indices:
+            raise ValueError(
+                f"Agent B FIX requires at least one linked issue: {reviewed_change.change_path}"
+            )
+        if reviewed_change.status is ReviewStatus.PASS and reviewed_change.issue_indices:
+            raise ValueError(
+                f"Agent B PASS cannot link correction issues: {reviewed_change.change_path}"
+            )
+        for issue_index in reviewed_change.issue_indices:
+            if not 0 <= issue_index < len(review.issues):
+                raise ValueError(
+                    f"Agent B issue index is out of range for {reviewed_change.change_path}: "
+                    f"{issue_index}"
+                )
+            if issue_index in claimed_issue_indices:
+                raise ValueError(f"Agent B issue index is linked more than once: {issue_index}")
+            claimed_issue_indices.add(issue_index)
+            if review.issues[issue_index].change_path != reviewed_change.change_path:
+                raise ValueError(
+                    f"Agent B issue {issue_index} does not belong to reviewed change "
+                    f"{reviewed_change.change_path}"
+                )
 
     original_path = run / "original_agent_a_proposal.json"
     if original_path.is_file():

@@ -5,10 +5,11 @@ from sb_processor.reconciliation.fixes import classify_and_apply_fix
 from sb_processor.reconciliation.models import IssueClassification, IssueOutcome, PatchKind
 
 
-def note_change(content: str, *, action: str = "CREATE", path: str = "Dots/Topic.md") -> NoteChange:
+def note_change(content: str, *, action: str = "CREATE", path: str = "Dots/Topic.md",
+                note_type: str = "concept") -> NoteChange:
     return NoteChange(
         action=action,
-        note_type="concept",
+        note_type=note_type,
         title="Topic",
         target_path=path,
         reason="fixture",
@@ -50,6 +51,67 @@ def test_objective_provenance_removes_direct_pdf_lines_but_keeps_lecture_and_pag
     assert "[[Lecture 01]]" in result.content
     assert "**Pages/slides:** 3-4" in result.content
     assert len(result.patches) == 4
+
+
+def test_direct_pdf_provenance_fix_is_restricted_to_concept_notes():
+    content = "---\ntype: lecture\nsource_file: lecture.pdf\n---\n# Lecture\n"
+    finding = issue(
+        "provenance",
+        "Keep the Lecture Note wikilink and page reference; remove direct PDF source_file/location metadata",
+        explanation="Concept Note duplicates direct PDF metadata",
+    )
+
+    result = classify_and_apply_fix(
+        note_change(content, note_type="lecture"), finding, content, None
+    )
+
+    assert result.outcome is IssueOutcome.HUMAN_REQUIRED
+    assert result.content == content
+
+
+def test_objective_workflow_contamination_removes_one_exact_body_literal():
+    content = (
+        "---\ntype: concept\n---\n# Topic\n"
+        "Agent A created this in the current batch. Durable explanation.\n"
+    )
+    finding = issue(
+        "workflow_contamination",
+        'Remove "Agent A created this in the current batch." from the body',
+        explanation="Permanent note contains processing text",
+    )
+
+    result = classify_and_apply_fix(note_change(content), finding, content, None)
+
+    assert result.classification is IssueClassification.OBJECTIVE
+    assert result.outcome is IssueOutcome.APPLIED
+    assert "Agent A created" not in result.content
+    assert "Durable explanation." in result.content
+
+
+def test_objective_frontmatter_repair_sets_one_schema_valid_exact_field():
+    content = "---\ntype: map\naliases: []\n---\n# Topic\nBody.\n"
+    finding = issue(
+        "metadata",
+        'Set frontmatter field "type" to "concept"',
+        explanation="Frontmatter type differs from proposed note type",
+    )
+
+    result = classify_and_apply_fix(note_change(content), finding, content, None)
+
+    assert result.classification is IssueClassification.OBJECTIVE
+    assert result.outcome is IssueOutcome.APPLIED
+    assert "type: concept" in result.content
+    assert "type: map" not in result.content
+
+
+def test_frontmatter_repair_refuses_type_that_disagrees_with_change_schema():
+    content = "---\ntype: map\n---\n# Topic\nBody.\n"
+    finding = issue("metadata", 'Set frontmatter field "type" to "map"')
+
+    result = classify_and_apply_fix(note_change(content), finding, content, None)
+
+    assert result.outcome is IssueOutcome.HUMAN_REQUIRED
+    assert result.content == content
 
 
 def test_objective_alias_removes_exact_new_alias():
@@ -183,10 +245,17 @@ def test_semantic_parser_refuses_mixed_delimiters_and_nonliteral_advice():
     content = "---\ntype: concept\n---\n# Topic\nAn unsupported claim.\n"
     mixed = issue("source_fidelity", 'Replace "unsupported claim\' with "supported claim"')
     optional = issue("source_fidelity", 'Remove or soften "unsupported claim"')
+    trailing_optional = issue(
+        "source_fidelity", 'Remove "unsupported claim" from the body or soften it'
+    )
+    trailing_replacement = issue(
+        "source_fidelity",
+        'Replace "unsupported claim" with "supported claim" or "qualified claim"',
+    )
     broad = issue("source_fidelity", "Align the paragraph with the lecture wording")
 
     results = [classify_and_apply_fix(note_change(content), item, content, None)
-               for item in (mixed, optional, broad)]
+               for item in (mixed, optional, trailing_optional, trailing_replacement, broad)]
 
     assert all(result.classification is IssueClassification.AMBIGUOUS for result in results)
     assert all(result.outcome is IssueOutcome.HUMAN_REQUIRED for result in results)

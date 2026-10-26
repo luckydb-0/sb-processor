@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from sb_processor.reconciliation.engine import reconcile
-from sb_processor.reconciliation.inputs import load_reconciliation_inputs
+from sb_processor.reconciliation.inputs import load_reconciliation_inputs, resolve_vault_target
 from sb_processor.reconciliation.models import PatchKind, PatchOperation
 from sb_processor.reconciliation.validators import validate_final_changes
 
@@ -15,9 +15,11 @@ VALID_CONTENT = "---\ntype: concept\n---\n# Topic\nA supported reusable explanat
 
 
 def validation_case(tmp_path: Path, *, content: str = VALID_CONTENT, action: str = "CREATE",
-                    path: str = "Dots/Topic.md", vault_contents: dict[str, str] | None = None):
+                    path: str = "Dots/Topic.md", vault_contents: dict[str, str] | None = None,
+                    original_content_hash: str | None = None):
     run = tmp_path / "run_1"
-    write_run(run, proposal([change(path=path, action=action, content=content)]),
+    write_run(run, proposal([change(path=path, action=action, content=content,
+                                    original_content_hash=original_content_hash)]),
               review([reviewed_change(path)]))
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -55,6 +57,36 @@ def test_path_traversal_is_invalid(tmp_path: Path):
     findings = validate_final_changes(inputs, changes)
 
     assert "INVALID_TARGET_PATH" in error_codes(findings)
+
+
+def test_symlink_escape_is_invalid_and_never_resolves_as_a_vault_target(tmp_path: Path):
+    outside = tmp_path / "outside.md"
+    outside.write_text(VALID_CONTENT, encoding="utf-8")
+    vault = tmp_path / "vault"
+    (vault / "Dots").mkdir(parents=True)
+    (vault / "Dots" / "Escape.md").symlink_to(outside)
+    run = tmp_path / "run_1"
+    write_run(
+        run,
+        proposal([change(path="Dots/Escape.md", action="UPDATE", content=VALID_CONTENT,
+                         original_content_hash=hashlib.sha256(VALID_CONTENT.encode()).hexdigest())]),
+        review([reviewed_change("Dots/Escape.md")]),
+    )
+    inputs = load_reconciliation_inputs(run, vault)
+    changes = reconcile(inputs).final_change_set.changes
+
+    findings = validate_final_changes(inputs, changes)
+
+    assert resolve_vault_target(vault, "Dots/Escape.md") is None
+    assert "INVALID_TARGET_PATH" in error_codes(findings)
+
+
+def test_note_type_must_use_the_university_workflow_root(tmp_path: Path):
+    inputs, changes = validation_case(tmp_path, path="Maps/Topic.md")
+
+    findings = validate_final_changes(inputs, changes)
+
+    assert "INVALID_CANONICAL_TARGET" in error_codes(findings)
 
 
 def test_missing_content_is_invalid_for_create(tmp_path: Path):
@@ -121,6 +153,36 @@ def test_action_must_match_target_existence(tmp_path: Path):
 
     assert "CREATE_TARGET_EXISTS" in error_codes(create_findings)
     assert "UPDATE_TARGET_MISSING" in error_codes(update_findings)
+
+
+def test_update_rejects_vault_content_changed_since_agent_a_snapshot(tmp_path: Path):
+    reviewed_existing = "---\ntype: concept\n---\n# Topic\nReviewed existing body.\n"
+    current_existing = "---\ntype: concept\n---\n# Topic\nChanged after review.\n"
+    inputs, changes = validation_case(
+        tmp_path,
+        action="UPDATE",
+        vault_contents={"Dots/Topic.md": current_existing},
+        original_content_hash=hashlib.sha256(reviewed_existing.encode()).hexdigest(),
+    )
+
+    findings = validate_final_changes(inputs, changes)
+
+    assert changes[0].expected_existing_content_sha256 == hashlib.sha256(
+        reviewed_existing.encode()
+    ).hexdigest()
+    assert "UPDATE_SOURCE_HASH_MISMATCH" in error_codes(findings)
+
+
+def test_update_requires_agent_a_snapshot_hash(tmp_path: Path):
+    inputs, changes = validation_case(
+        tmp_path,
+        action="UPDATE",
+        vault_contents={"Dots/Topic.md": VALID_CONTENT},
+    )
+
+    findings = validate_final_changes(inputs, changes)
+
+    assert "UPDATE_SOURCE_HASH_MISSING" in error_codes(findings)
 
 
 def test_claimed_fix_is_invalid_when_removed_marker_remains(tmp_path: Path):

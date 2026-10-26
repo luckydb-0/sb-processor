@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ..models import Action, NoteChange, ReviewStatus
 from .fixes import classify_and_apply_fix
-from .inputs import ReconciliationInputs
+from .inputs import ReconciliationInputs, resolve_vault_target
 from .models import (
     DecisionEffect,
     DecisionOption,
@@ -35,8 +35,8 @@ def _sha256_text(value: str) -> str:
 
 
 def _existing_content(inputs: ReconciliationInputs, path: str) -> str | None:
-    target = inputs.vault / path
-    return target.read_text(encoding="utf-8") if target.is_file() else None
+    target = resolve_vault_target(inputs.vault, path)
+    return target.read_text(encoding="utf-8") if target is not None and target.is_file() else None
 
 
 def _known_targets(inputs: ReconciliationInputs) -> set[str]:
@@ -185,15 +185,21 @@ def reconcile(inputs: ReconciliationInputs,
             if decision_id is not None:
                 decisions.append(_decision(decision_id, change_id, reconciled_issue, change))
 
-        if change.action is Action.REVIEW_REQUIRED and not decision_ids:
+        if (change.action is Action.REVIEW_REQUIRED or review.status is ReviewStatus.REVIEW_REQUIRED) \
+                and not decision_ids:
             decision_number += 1
             decision_id = f"HR-{decision_number:03d}"
+            explanation = (
+                change.reason
+                if change.action is Action.REVIEW_REQUIRED
+                else "Agent B marked the whole change REVIEW_REQUIRED after its issue-level review."
+            )
             synthetic = ReconciledIssue(
                 id=f"{change_id}-I{len(reconciled_issues) + 1:02d}",
                 agent_b_issue_index=-1,
                 issue_type="existing_note",
-                explanation=change.reason,
-                proposed_correction="Resolve the original Agent A review requirement",
+                explanation=explanation,
+                proposed_correction="Resolve the explicit whole-change review requirement",
                 classification="AMBIGUOUS",
                 outcome="HUMAN_REQUIRED",
                 human_decision_id=decision_id,
@@ -216,6 +222,7 @@ def reconcile(inputs: ReconciliationInputs,
             original_action=change.action,
             original_target_path=change.target_path,
             original_content_sha256=_sha256_text(change.content),
+            expected_existing_content_sha256=change.original_content_hash,
             agent_b_status=review.status,
             agent_b_issue_indices=list(review.issue_indices),
             issues=reconciled_issues,
@@ -353,8 +360,10 @@ def reconcile(inputs: ReconciliationInputs,
                     )
             if option.effect is DecisionEffect.APPLY_RECONCILED_CHANGE:
                 if reconciled.original_action is Action.REVIEW_REQUIRED:
-                    target = inputs.vault / reconciled.original_target_path
-                    reconciled.final_action = Action.UPDATE if target.is_file() else Action.CREATE
+                    target = resolve_vault_target(inputs.vault, reconciled.original_target_path)
+                    reconciled.final_action = (
+                        Action.UPDATE if target is not None and target.is_file() else Action.CREATE
+                    )
                 else:
                     reconciled.final_action = reconciled.original_action
                 if reconciled.final_action in (Action.CREATE, Action.UPDATE):

@@ -114,6 +114,50 @@ def test_multiple_issues_keep_independent_outcomes_and_block_only_for_ambiguous_
     assert result.final_change_set.human_decisions[0].issue_ids == ["RC-001-I02"]
 
 
+def test_agent_b_review_required_without_issues_still_requires_human_decision(tmp_path: Path):
+    inputs = loaded_inputs(
+        tmp_path,
+        [change()],
+        [reviewed_change("Dots/Topic.md", status="REVIEW_REQUIRED")],
+    )
+
+    result = reconcile(inputs)
+
+    reconciled = result.final_change_set.changes[0]
+    assert reconciled.status is ReconciledChangeStatus.BLOCKED
+    assert reconciled.human_decision_ids == ["HR-001"]
+    assert result.final_change_set.human_decisions[0].category == "existing_note"
+    assert result.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
+
+
+def test_agent_b_review_required_with_only_auto_fixes_still_requires_human_decision(
+        tmp_path: Path):
+    content = (
+        "---\ntype: concept\nsource_file: lecture.pdf\n---\n# Topic\n"
+        "## Sources\n### [[Lecture 01]]\n**Pages/slides:** 3\n"
+    )
+    issues = [review_issue(
+        "Dots/Topic.md",
+        "provenance",
+        "Keep the Lecture Note wikilink and page reference; remove direct PDF source_file/location metadata",
+        explanation="Concept Note duplicates direct PDF metadata",
+    )]
+    inputs = loaded_inputs(
+        tmp_path,
+        [change(content=content)],
+        [reviewed_change("Dots/Topic.md", status="REVIEW_REQUIRED", issue_indices=[0])],
+        issues,
+        vault_contents={"Sources/Lecture 01.md": "---\ntype: lecture\n---\n# Lecture 01\n"},
+    )
+
+    result = reconcile(inputs)
+
+    reconciled = result.final_change_set.changes[0]
+    assert reconciled.issues[0].outcome is IssueOutcome.APPLIED
+    assert reconciled.human_decision_ids == ["HR-001"]
+    assert reconciled.status is ReconciledChangeStatus.BLOCKED
+
+
 def unresolved_link_inputs(tmp_path: Path, *, action: str = "CREATE", vault_contents=None):
     content = "---\ntype: concept\n---\n# Topic\nSee [[Statistics]].\n"
     issues = [review_issue("Dots/Topic.md", "link", "Use a verified canonical target or remove the link",
@@ -348,7 +392,8 @@ def test_update_paragraph_loss_generates_preservation_decision(tmp_path: Path):
     final = "---\ntype: concept\n---\n# Topic\n\nReplacement.\n"
     inputs = loaded_inputs(
         tmp_path,
-        [change(content=final, action="UPDATE")],
+        [change(content=final, action="UPDATE",
+                original_content_hash=hashlib.sha256(existing.encode()).hexdigest())],
         [reviewed_change("Dots/Topic.md")],
         vault_contents={"Dots/Topic.md": existing},
     )
@@ -370,7 +415,8 @@ def test_resolved_preservation_decision_allows_ready_state_with_audited_warning(
     final = "---\ntype: concept\n---\n# Topic\n\nReplacement.\n"
     inputs = loaded_inputs(
         tmp_path,
-        [change(content=final, action="UPDATE")],
+        [change(content=final, action="UPDATE",
+                original_content_hash=hashlib.sha256(existing.encode()).hexdigest())],
         [reviewed_change("Dots/Topic.md")],
         vault_contents={"Dots/Topic.md": existing},
     )

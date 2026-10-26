@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ..models import Action
 from .inputs import ReconciliationInputs
-from .inputs import load_reconciliation_inputs
+from .inputs import load_reconciliation_inputs, resolve_vault_target
 from .engine import reconcile
 from .models import (
     DecisionStatus,
@@ -21,17 +21,37 @@ from .models import (
 
 def _verify_inputs(inputs: ReconciliationInputs) -> None:
     for relative, expected in inputs.input_sha256.items():
-        path = inputs.run / relative
+        path = (inputs.decision_input_path
+                if relative == "human_decisions.json" else inputs.run / relative)
+        if path is None or not path.is_file():
+            raise ValueError(f"Reconciliation input is missing during processing: {relative}")
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual != expected:
             raise ValueError(f"Reconciliation input changed during processing: {relative}")
+
+
+def _verify_vault_snapshot(result: ReconciliationResult, inputs: ReconciliationInputs) -> None:
+    for change in result.final_change_set.changes:
+        if change.final_action is not Action.UPDATE:
+            continue
+        expected = change.expected_existing_content_sha256
+        if expected is None:
+            continue
+        relative = change.final_target_path or change.original_target_path
+        target = resolve_vault_target(inputs.vault, relative)
+        actual = hashlib.sha256(target.read_bytes()).hexdigest() if target and target.is_file() else None
+        if actual != expected:
+            raise ValueError(f"Vault UPDATE target changed during reconciliation: {relative}")
 
 
 def _human_review(result: ReconciliationResult) -> str:
     final = result.final_change_set
     ready = sum(item.status is ReconciledChangeStatus.READY for item in final.changes)
     fixed = sum(item.status is ReconciledChangeStatus.FIXED for item in final.changes)
-    pending = sum(item.status is DecisionStatus.PENDING for item in final.human_decisions)
+    pending_decisions = [item for item in final.human_decisions
+                         if item.status is DecisionStatus.PENDING]
+    pending = len(pending_decisions)
+    resolved = len(final.human_decisions) - pending
     lines = [
         "# Human Review",
         "",
@@ -40,6 +60,7 @@ def _human_review(result: ReconciliationResult) -> str:
         f"Automatically ready: {ready}",
         f"Automatically fixed: {fixed}",
         f"Needs your decision: {pending}",
+        f"Resolved or deferred decisions: {resolved}",
         "",
         f"FinalChangeSet: `{final.state.value}`",
         "",
@@ -48,7 +69,12 @@ def _human_review(result: ReconciliationResult) -> str:
     ]
     if not final.human_decisions:
         lines.extend(["No human decisions are required.", ""])
-    for decision in final.human_decisions:
+    elif not pending_decisions:
+        lines.extend([
+            "No pending human decisions. See `human_decisions.json` for the complete audit.",
+            "",
+        ])
+    for decision in pending_decisions:
         lines.extend([
             f"### {decision.id} — {decision.category}",
             "",
@@ -85,7 +111,10 @@ def _human_review(result: ReconciliationResult) -> str:
 
 def _write_diff(root: Path, inputs: ReconciliationInputs, change) -> str:
     path = change.final_target_path or change.original_target_path
-    before = (inputs.vault / path).read_text(encoding="utf-8").splitlines(keepends=True)
+    target = resolve_vault_target(inputs.vault, path)
+    if target is None:
+        raise ValueError(f"Unsafe UPDATE target path: {path}")
+    before = target.read_text(encoding="utf-8").splitlines(keepends=True)
     after = (change.final_content or "").splitlines(keepends=True)
     diff = "".join(difflib.unified_diff(
         before,
@@ -144,6 +173,7 @@ def stage_reconciliation(run: Path, result: ReconciliationResult,
     if run != inputs.run:
         raise ValueError("Staging run does not match loaded reconciliation inputs")
     _verify_inputs(inputs)
+    _verify_vault_snapshot(result, inputs)
     temporary = Path(tempfile.mkdtemp(prefix=".reconciliation-", dir=run))
     try:
         final = result.final_change_set
@@ -165,6 +195,7 @@ def stage_reconciliation(run: Path, result: ReconciliationResult,
             _write_preview(temporary, result, inputs), encoding="utf-8"
         )
         _verify_inputs(inputs)
+        _verify_vault_snapshot(result, inputs)
         output = run / "reconciliation"
         if output.exists():
             shutil.rmtree(output)
@@ -175,19 +206,29 @@ def stage_reconciliation(run: Path, result: ReconciliationResult,
         raise
 
 
-def _load_decisions(path: Path | None) -> dict[str, str]:
+def _load_decisions(path: Path | None) -> tuple[dict[str, str], Path | None, str | None]:
     if path is None:
-        return {}
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        return {}, None, None
+    resolved = Path(path).resolve(strict=True)
+    raw = resolved.read_bytes()
+    payload = json.loads(raw.decode("utf-8"))
     if not isinstance(payload, dict) or any(not isinstance(key, str) or not isinstance(value, str)
                                             for key, value in payload.items()):
         raise ValueError("Decision file must contain a JSON object mapping decision IDs to option keys")
-    return payload
+    return payload, resolved, hashlib.sha256(raw).hexdigest()
 
 
 def run_reconciliation(run: Path, vault: Path,
                        decisions_path: Path | None = None) -> FinalChangeSet:
     inputs = load_reconciliation_inputs(run, vault)
-    result = reconcile(inputs, _load_decisions(decisions_path))
+    selections, resolved_decisions, decisions_sha256 = _load_decisions(decisions_path)
+    if resolved_decisions is not None:
+        if resolved_decisions.is_relative_to(inputs.run / "reconciliation"):
+            raise ValueError("Decision file must be outside the generated reconciliation directory")
+        inputs.decision_input_path = resolved_decisions
+        inputs.provenance["human_decisions"] = str(resolved_decisions)
+        assert decisions_sha256 is not None
+        inputs.input_sha256["human_decisions.json"] = decisions_sha256
+    result = reconcile(inputs, selections)
     stage_reconciliation(inputs.run, result, inputs)
     return result.final_change_set

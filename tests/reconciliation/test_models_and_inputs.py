@@ -126,6 +126,48 @@ def test_loader_rejects_agent_b_change_without_matching_reviewed_proposal(tmp_pa
         load_reconciliation_inputs(run, vault)
 
 
+def test_loader_rejects_agent_b_issue_index_owned_by_another_change(tmp_path: Path):
+    run = tmp_path / "run_1"
+    changes = [change(path="Dots/One.md"), change(path="Dots/Two.md")]
+    issue = {
+        "change_path": "Dots/Two.md",
+        "issue_type": "claim_strength",
+        "severity": "medium",
+        "explanation": "Needs correction",
+        "proposed_correction": "Confirm the claim",
+        "source_pages": [],
+        "evidence_refs": [],
+        "corrected_content": None,
+    }
+    write_run(
+        run,
+        proposal(changes),
+        review([
+            reviewed_change("Dots/One.md", status="FIX", issue_indices=[0]),
+            reviewed_change("Dots/Two.md"),
+        ], issues=[issue], overall_status="FIX"),
+    )
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    with pytest.raises(ValueError, match="does not belong to reviewed change"):
+        load_reconciliation_inputs(run, vault)
+
+
+def test_loader_rejects_fix_status_without_a_linked_issue(tmp_path: Path):
+    run = tmp_path / "run_1"
+    write_run(
+        run,
+        proposal([change()]),
+        review([reviewed_change("Dots/Topic.md", status="FIX")], overall_status="FIX"),
+    )
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    with pytest.raises(ValueError, match="FIX requires at least one linked issue"):
+        load_reconciliation_inputs(run, vault)
+
+
 def test_loader_validates_original_actions_without_mutating_inputs(tmp_path: Path):
     run = tmp_path / "run_1"
     data = proposal([change(action=Action.CREATE.value)])

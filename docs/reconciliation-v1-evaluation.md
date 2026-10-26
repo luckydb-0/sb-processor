@@ -1,6 +1,6 @@
 # Reconciliation + Human Review v1 evaluation
 
-Evaluated on 2026-10-25 against the frozen Agent B release
+Evaluated on 2026-10-26 against the frozen Agent B release
 `staging/agent_b_v1_freeze_benchmark/gpt-5.4-mini-low-freeze-release` and a copied
 `staging/two_pass_fixture_vault`. Reconciliation did not write to either the fixture vault or the
 real `../gd-gdb` vault.
@@ -14,7 +14,8 @@ inputs through `PENDING_HUMAN_REVIEW`, explicit decisions, deterministic revalid
 
 ## Demonstrated lifecycle
 
-The persistent local demonstration is under `staging/reconciliation_v1_demo_final/` (Git-ignored):
+The final verified local demonstration is under `staging/reconciliation_v1_demo_verified/`
+(Git-ignored):
 
 - pending review: `pending/HUMAN_REVIEW.md` and `pending/final_change_set.json`;
 - example choices: `decisions.json`;
@@ -64,25 +65,21 @@ The copied upstream artifacts retained the same SHA-256 values as the frozen rel
 | reviewed `proposal.json` | `4532fb1cb0ebdaaea20885a3b05559935aebe7569c97ace7d08bc9c79559036f` |
 | `agent_b/review.json` | `39e3ab92bda24b6d52bee2d4100f792fe207c61eb1197baf75cbde6993c29208` |
 
-The real `../gd-gdb` vault manifest hash was
-`001fc1c15d9dcbe264f86488491421dbd5b7a1d121b5ef34f8507a7cef0ab13d` before and after the
-demonstration. All generated files stayed under the copied run's `reconciliation/` directory or the
-Git-ignored demonstration directory.
+The copied fixture vault manifest hash was
+`d6e221c3cb6854573184edb04e2af87e9218e95ed6a4d12b0c676a3533a7f17a` before and after the
+final replay. The real `../gd-gdb` vault remained untouched. All generated files stayed under the
+copied run's `reconciliation/` directory or the Git-ignored demonstration directory. The resumed
+result also records the absolute human-decision source and its SHA-256
+(`2e885a549b1957682373b6bb5ae5195cf12e27d49e01667ca364a1830f9c6ac4`) in the final writer
+contract.
 
 ## Verification
 
-The reconciliation, CLI, review, processing, retrieval, and vault-registry suite passes: 181 tests.
-The full suite reports 232 passed, 1 skipped, and six known environment-only failures that were
-present before this milestone:
-
-- `test_layout_extraction_keeps_markdown_and_layout_metadata` — `pymupdf4llm` extra absent;
-- `test_docling_preserves_pages_tables_pictures_and_visual_gate` — `docling` distribution metadata absent;
-- `test_comparison_writes_both_extractions_without_llm` — `pymupdf4llm` extra absent;
-- `test_comparison_can_include_docling_without_requiring_it_by_default` — `pymupdf4llm` extra absent;
-- `test_base_cli_import_does_not_require_semantic_extra` — package is not installed into the spawned subprocess;
-- `test_semantic_index_filters_and_incrementally_syncs` — `qdrant_client` extra absent.
-
-None touches reconciliation behavior.
+The reconciliation, CLI, review, processing, retrieval, and vault-registry suite passes: 196 tests.
+The full suite passes with 253 tests and 1 skipped test. The focused safety coverage includes stale
+UPDATE rejection, canonical path and symlink containment, Agent B issue ownership, whole-change
+review escalation, exact semantic-fix boundaries, human-decision provenance, and staging-time input
+immutability.
 
 ## Remaining non-blocking limitations
 
