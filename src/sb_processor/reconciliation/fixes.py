@@ -16,9 +16,16 @@ from .models import (
 
 
 _FRONTMATTER = re.compile(r"\A---\s*\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", re.DOTALL)
-_DIRECT_PDF_LINE = re.compile(
-    r"(?im)^(?:source_file|location):[^\n]*(?:\n|$)|"
-    r"^\*\*(?:Source|Location):\*\*[^\n]*(?:\.pdf\b|[/~])[^\n]*(?:\n|$)"
+_FRONTMATTER_PDF_FIELD = re.compile(
+    r"(?im)^(?:source_file|location):[^\n]*(?:\n|$)"
+)
+_SOURCE_PDF_LINE = re.compile(
+    r"(?im)^\*\*(?:Source|Location):\*\*[^\n]*(?:\.pdf\b|[/~])[^\n]*(?:\n|$)"
+)
+_SOURCES_HEADING = re.compile(r"(?im)^##[ \t]+Sources[ \t]*\r?$")
+_SECTION_HEADING = re.compile(r"(?m)^#{1,2}[ \t]+")
+_FENCED_BLOCK = re.compile(
+    r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*(?:\n|$)"
 )
 _ALIAS_REMOVAL = re.compile(r"^Remove alias (?P<quote>['\"])(?P<alias>.+?)(?P=quote) from frontmatter$")
 _CANONICAL_LINK = re.compile(r"^Use \[\[(?P<target>[^\]]+)\]\]$")
@@ -34,9 +41,14 @@ _SEMANTIC_REPLACE = re.compile(
     r"^Replace (?P<quote>[\"'`])(?P<old>.+?)(?P=quote) with "
     r"(?P=quote)(?P<new>.+?)(?P=quote)(?P<suffix>.*)$"
 )
-_ALTERNATIVE_INSTRUCTION = re.compile(
-    r"\b(?:or|alternatively|otherwise|soften|rewrite|replace)\b", re.IGNORECASE
-)
+_SEMANTIC_REMOVE_SUFFIXES = {
+    "",
+    " from the body",
+    " from the body unless evidence is added",
+    " from the body unless a supplied source page for that linkage is added.",
+}
+_SEMANTIC_REPLACE_SUFFIXES = {"", " in the body"}
+_WORKFLOW_REMOVE_SUFFIXES = {"", " from the body"}
 _SEMANTIC_TYPES = {
     "source_fidelity",
     "claim_strength",
@@ -83,11 +95,35 @@ def _provenance_fix(change: NoteChange, issue: ReviewIssue, content: str) -> Fix
             or issue.explanation != "Concept Note duplicates direct PDF metadata"
             or "remove direct PDF source_file/location metadata" not in issue.proposed_correction):
         return None
-    patches = [
-        PatchOperation(kind=PatchKind.REMOVE, start=match.start(), end=match.end(),
-                       before=match.group(0), after="")
-        for match in _DIRECT_PDF_LINE.finditer(content)
-    ]
+    patches: list[PatchOperation] = []
+    frontmatter = _FRONTMATTER.match(content)
+    if frontmatter is not None:
+        for match in _FRONTMATTER_PDF_FIELD.finditer(frontmatter.group(1)):
+            start = frontmatter.start(1) + match.start()
+            end = frontmatter.start(1) + match.end()
+            patches.append(PatchOperation(
+                kind=PatchKind.REMOVE,
+                start=start,
+                end=end,
+                before=content[start:end],
+                after="",
+            ))
+
+    sources_heading = _SOURCES_HEADING.search(content, frontmatter.end() if frontmatter else 0)
+    if sources_heading is not None:
+        following_heading = _SECTION_HEADING.search(content, sources_heading.end())
+        section_end = following_heading.start() if following_heading else len(content)
+        fenced_spans = [(match.start(), match.end()) for match in _FENCED_BLOCK.finditer(content)]
+        for match in _SOURCE_PDF_LINE.finditer(content, sources_heading.end(), section_end):
+            if any(start <= match.start() < end for start, end in fenced_spans):
+                continue
+            patches.append(PatchOperation(
+                kind=PatchKind.REMOVE,
+                start=match.start(),
+                end=match.end(),
+                before=match.group(0),
+                after="",
+            ))
     if not patches:
         return _result(content, IssueClassification.OBJECTIVE, IssueOutcome.HUMAN_REQUIRED,
                        "No exact direct-PDF metadata lines were found")
@@ -99,7 +135,7 @@ def _workflow_contamination_fix(issue: ReviewIssue, content: str) -> FixResult |
     if issue.issue_type.value != "workflow_contamination":
         return None
     directive = _SEMANTIC_REMOVE.fullmatch(issue.proposed_correction)
-    if directive is None or _ALTERNATIVE_INSTRUCTION.search(directive.group("suffix")):
+    if directive is None or directive.group("suffix") not in _WORKFLOW_REMOVE_SUFFIXES:
         return _result(content, IssueClassification.AMBIGUOUS, IssueOutcome.HUMAN_REQUIRED,
                        "Workflow correction is not one exact removal directive")
     literal = directive.group("old")
@@ -244,9 +280,12 @@ def _semantic_fix(issue: ReviewIssue, content: str) -> FixResult | None:
                        "Semantic correction is not an exact quoted remove/replace directive")
     directive = replacement or removal
     assert directive is not None
-    if _ALTERNATIVE_INSTRUCTION.search(directive.group("suffix")):
+    allowed_suffixes = (
+        _SEMANTIC_REPLACE_SUFFIXES if replacement is not None else _SEMANTIC_REMOVE_SUFFIXES
+    )
+    if directive.group("suffix") not in allowed_suffixes:
         return _result(content, IssueClassification.AMBIGUOUS, IssueOutcome.HUMAN_REQUIRED,
-                       "Semantic correction includes an alternative instruction")
+                       "Semantic correction is outside the finite v1 instruction grammar")
     old = directive.group("old")
     new = directive.groupdict().get("new") or ""
     frontmatter = _FRONTMATTER.match(content)

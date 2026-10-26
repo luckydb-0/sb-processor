@@ -168,6 +168,44 @@ def test_loader_rejects_fix_status_without_a_linked_issue(tmp_path: Path):
         load_reconciliation_inputs(run, vault)
 
 
+def test_loader_rejects_orphaned_agent_b_issue(tmp_path: Path):
+    run = tmp_path / "run_1"
+    orphan = {
+        "change_path": "Dots/Topic.md",
+        "issue_type": "claim_strength",
+        "severity": "medium",
+        "explanation": "Needs correction",
+        "proposed_correction": "Confirm the claim",
+        "source_pages": [],
+        "evidence_refs": [],
+        "corrected_content": None,
+    }
+    write_run(
+        run,
+        proposal([change()]),
+        review([reviewed_change("Dots/Topic.md")], issues=[orphan]),
+    )
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    with pytest.raises(ValueError, match="not linked to a reviewed change"):
+        load_reconciliation_inputs(run, vault)
+
+
+def test_loader_rejects_incoherent_agent_b_overall_status(tmp_path: Path):
+    run = tmp_path / "run_1"
+    write_run(
+        run,
+        proposal([change()]),
+        review([reviewed_change("Dots/Topic.md")], overall_status="FIX"),
+    )
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    with pytest.raises(ValueError, match="overall status does not match"):
+        load_reconciliation_inputs(run, vault)
+
+
 def test_loader_validates_original_actions_without_mutating_inputs(tmp_path: Path):
     run = tmp_path / "run_1"
     data = proposal([change(action=Action.CREATE.value)])

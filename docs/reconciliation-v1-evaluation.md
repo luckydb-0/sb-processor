@@ -14,7 +14,7 @@ inputs through `PENDING_HUMAN_REVIEW`, explicit decisions, deterministic revalid
 
 ## Demonstrated lifecycle
 
-The final verified local demonstration is under `staging/reconciliation_v1_demo_verified/`
+The final verified local demonstration is under `staging/reconciliation_v1_demo_release/`
 (Git-ignored):
 
 - pending review: `pending/HUMAN_REVIEW.md` and `pending/final_change_set.json`;
@@ -66,7 +66,7 @@ The copied upstream artifacts retained the same SHA-256 values as the frozen rel
 | `agent_b/review.json` | `39e3ab92bda24b6d52bee2d4100f792fe207c61eb1197baf75cbde6993c29208` |
 
 The copied fixture vault manifest hash was
-`d6e221c3cb6854573184edb04e2af87e9218e95ed6a4d12b0c676a3533a7f17a` before and after the
+`773e58ac7a9191e5f0459774b48d2b0f916c9480a813be38576fca26089dd551` before and after the
 final replay. The real `../gd-gdb` vault remained untouched. All generated files stayed under the
 copied run's `reconciliation/` directory or the Git-ignored demonstration directory. The resumed
 result also records the absolute human-decision source and its SHA-256
@@ -75,8 +75,8 @@ contract.
 
 ## Verification
 
-The reconciliation, CLI, review, processing, retrieval, and vault-registry suite passes: 196 tests.
-The full suite passes with 253 tests and 1 skipped test. The focused safety coverage includes stale
+The reconciliation, CLI, review, processing, retrieval, and vault-registry suite passes: 200 tests.
+The full suite passes with 257 tests and 1 skipped test. The focused safety coverage includes stale
 UPDATE rejection, canonical path and symlink containment, Agent B issue ownership, whole-change
 review escalation, exact semantic-fix boundaries, human-decision provenance, and staging-time input
 immutability.

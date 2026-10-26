@@ -116,6 +116,23 @@ def load_reconciliation_inputs(run: Path, vault: Path) -> ReconciliationInputs:
                     f"Agent B issue {issue_index} does not belong to reviewed change "
                     f"{reviewed_change.change_path}"
                 )
+    expected_issue_indices = set(range(len(review.issues)))
+    if claimed_issue_indices != expected_issue_indices:
+        orphaned = sorted(expected_issue_indices - claimed_issue_indices)
+        raise ValueError(f"Agent B issues are not linked to a reviewed change: {orphaned}")
+    statuses = {item.status for item in review.reviewed_changes}
+    derived_status = (
+        ReviewStatus.REVIEW_REQUIRED
+        if ReviewStatus.REVIEW_REQUIRED in statuses
+        else ReviewStatus.FIX
+        if ReviewStatus.FIX in statuses
+        else ReviewStatus.PASS
+    )
+    if review.overall_status is not derived_status:
+        raise ValueError(
+            "Agent B overall status does not match reviewed change statuses: "
+            f"expected {derived_status.value}, got {review.overall_status.value}"
+        )
 
     original_path = run / "original_agent_a_proposal.json"
     if original_path.is_file():

@@ -69,6 +69,33 @@ def test_direct_pdf_provenance_fix_is_restricted_to_concept_notes():
     assert result.content == content
 
 
+def test_direct_pdf_provenance_fix_preserves_body_and_fenced_code_outside_recognized_metadata():
+    content = (
+        "---\ntype: concept\nsource_file: lecture.pdf\nlocation: /private/lecture.pdf\n---\n"
+        "# Topic\n\nsource_file: keep-this-body-example.pdf\n\n"
+        "## Sources\n\n### [[Lecture 01]]\n\n"
+        "**Source:** `lecture.pdf`  \n**Location:** /private/lecture.pdf  \n"
+        "```yaml\nsource_file: keep-this-code-example.pdf\n"
+        "**Source:** `keep-this-code-example.pdf`\n```\n\n"
+        "## Notes\n\n**Source:** `keep-this-other-section.pdf`\n"
+    )
+    finding = issue(
+        "provenance",
+        "Keep the Lecture Note wikilink and page reference; remove direct PDF source_file/location metadata",
+        explanation="Concept Note duplicates direct PDF metadata",
+    )
+
+    result = classify_and_apply_fix(note_change(content), finding, content, None)
+
+    assert result.outcome is IssueOutcome.APPLIED
+    assert "source_file: lecture.pdf" not in result.content
+    assert "**Source:** `lecture.pdf`" not in result.content
+    assert "source_file: keep-this-body-example.pdf" in result.content
+    assert "source_file: keep-this-code-example.pdf" in result.content
+    assert "**Source:** `keep-this-code-example.pdf`" in result.content
+    assert "**Source:** `keep-this-other-section.pdf`" in result.content
+
+
 def test_objective_workflow_contamination_removes_one_exact_body_literal():
     content = (
         "---\ntype: concept\n---\n# Topic\n"
@@ -252,11 +279,35 @@ def test_semantic_parser_refuses_mixed_delimiters_and_nonliteral_advice():
         "source_fidelity",
         'Replace "unsupported claim" with "supported claim" or "qualified claim"',
     )
+    trailing_addition = issue(
+        "source_fidelity", 'Remove "unsupported claim" from the body and add "supported claim"'
+    )
+    sequential = issue(
+        "source_fidelity", 'Remove "unsupported claim" from the body then insert a citation'
+    )
+    conditional = issue(
+        "source_fidelity", 'Remove "unsupported claim" from the body if the source is unavailable'
+    )
     broad = issue("source_fidelity", "Align the paragraph with the lecture wording")
 
     results = [classify_and_apply_fix(note_change(content), item, content, None)
-               for item in (mixed, optional, trailing_optional, trailing_replacement, broad)]
+               for item in (mixed, optional, trailing_optional, trailing_replacement,
+                            trailing_addition, sequential, conditional, broad)]
 
     assert all(result.classification is IssueClassification.AMBIGUOUS for result in results)
     assert all(result.outcome is IssueOutcome.HUMAN_REQUIRED for result in results)
     assert all(result.content == content for result in results)
+
+
+def test_workflow_parser_refuses_extra_instruction_after_exact_literal():
+    content = "---\ntype: concept\n---\n# Topic\nAgent A generated this.\n"
+    finding = issue(
+        "workflow_contamination",
+        'Remove "Agent A generated this." from the body and add a durable explanation',
+    )
+
+    result = classify_and_apply_fix(note_change(content), finding, content, None)
+
+    assert result.classification is IssueClassification.AMBIGUOUS
+    assert result.outcome is IssueOutcome.HUMAN_REQUIRED
+    assert result.content == content

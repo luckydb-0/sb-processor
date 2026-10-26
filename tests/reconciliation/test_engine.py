@@ -19,8 +19,12 @@ from .helpers import change, proposal, review, review_issue, reviewed_change, wr
 def loaded_inputs(tmp_path: Path, changes: list[dict], reviewed: list[dict], issues: list[dict] | None = None,
                   vault_contents: dict[str, str] | None = None):
     run = tmp_path / "run_1"
-    write_run(run, proposal(changes), review(reviewed, issues=issues,
-                                             overall_status="FIX" if issues else "PASS"))
+    statuses = {item["status"] for item in reviewed}
+    overall_status = ("REVIEW_REQUIRED" if "REVIEW_REQUIRED" in statuses
+                      else "FIX" if "FIX" in statuses else "PASS")
+    write_run(run, proposal(changes), review(
+        reviewed, issues=issues, overall_status=overall_status
+    ))
     vault = tmp_path / "vault"
     vault.mkdir()
     for path, content in (vault_contents or {}).items():
