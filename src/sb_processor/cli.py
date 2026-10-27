@@ -17,6 +17,7 @@ from .workflows.university import UniversityWorkflow
 from .documents.visual import OpenAIVisualPageExtractor
 from .knowledge.semantic import DEFAULT_EMBEDDING_MODEL
 from .knowledge.retrieval import DEFAULT_SEMANTIC_THRESHOLD
+from .reconciliation.artifacts import run_reconciliation
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,6 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--model", default=DEFAULT_REVIEW_MODEL)
     review.add_argument("--reasoning-effort", default=DEFAULT_REVIEW_REASONING_EFFORT,
                         choices=["none", "minimal", "low", "medium", "high", "xhigh"])
+    reconcile = sub.add_parser("reconcile", help="Reconcile Agent A and Agent B into a human-reviewable change set")
+    reconcile.add_argument("--run", type=Path, required=True)
+    reconcile.add_argument("--vault", type=Path, required=True)
+    reconcile.add_argument("--decisions", type=Path)
     compare = sub.add_parser("compare-pdf", help="Compare raw and cleaned PDF conversions without calling an LLM")
     compare.add_argument("--source", type=Path, required=True)
     compare.add_argument("--output-dir", type=Path, default=Path("staging/comparisons"))
@@ -129,6 +134,13 @@ def main(argv: list[str] | None = None) -> int:
             args.model, reasoning_effort=args.reasoning_effort),
                                    instructions_path=args.instructions)
         print(f"Agent B review: {args.run / 'agent_b'} ({result.overall_status.value})")
+    elif args.command == "reconcile":
+        _reject_inside_vault(parser, args.vault, args.run)
+        result = run_reconciliation(args.run, args.vault, args.decisions)
+        output = args.run.resolve() / "reconciliation"
+        print(f"FinalChangeSet: {result.state.value}")
+        print(f"Human review: {output / 'HUMAN_REVIEW.md'}")
+        print(f"Write preview: {output / 'WRITE_PREVIEW.md'}")
     elif args.command == "compare-pdf":
         if args.output_dir.resolve().is_relative_to(args.vault.resolve(strict=True)):
             parser.error("Comparison output must be outside the vault")
