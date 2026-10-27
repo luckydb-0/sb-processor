@@ -9,12 +9,22 @@ from pydantic import ValidationError
 from sb_processor.models import Action
 from sb_processor.reconciliation.inputs import load_reconciliation_inputs
 from sb_processor.reconciliation.models import (
+    AcceptedRisk,
+    DecisionCategory,
     DecisionEffect,
     DecisionOption,
     DecisionStatus,
+    DependencyRecord,
+    DependencyTargetState,
     FinalChangeSet,
     FinalChangeSetState,
     HumanDecision,
+    IdentityClaim,
+    IdentityClaimKind,
+    IdentityCollision,
+    IssueResolutionDisposition,
+    MaterialLossKind,
+    MaterialLossRecord,
 )
 
 from .helpers import change, proposal, review, reviewed_change, write_run
@@ -64,6 +74,114 @@ def test_final_change_set_serializes_explicit_state_and_provenance():
     payload = result.model_dump(mode="json")
     assert payload["state"] == "READY_FOR_WRITE"
     assert payload["reconciliation_version"] == "reconciliation-v1"
+
+
+def test_v11_safety_models_round_trip_dependency_identity_loss_and_risk_audit():
+    dependency = DependencyRecord(
+        id="DEP-RC-001-01",
+        source_change_id="RC-001",
+        source_path="Atlas/Dots/Data Mining.md",
+        token="[[Data Mining - Map]]",
+        normalized_target="data mining map",
+        target_state=DependencyTargetState.TARGET_CREATED_IN_BATCH,
+        target_path="Atlas/Maps/Data Mining - Map.md",
+        target_change_id="RC-002",
+        blocking=False,
+    )
+    claim = IdentityClaim(
+        value="Classification",
+        normalized="classification",
+        kind=IdentityClaimKind.ALIAS,
+        canonical_path="Atlas/Dots/Predictive Classification.md",
+        change_id="RC-002",
+        from_existing_vault=True,
+    )
+    collision = IdentityCollision(
+        id="IDENTITY-classification",
+        normalized_identity="classification",
+        claims=[claim],
+        change_ids=["RC-001", "RC-002"],
+        dependent_change_ids=["RC-003"],
+        blocking=True,
+        human_decision_id="HR-001",
+    )
+    loss = MaterialLossRecord(
+        id="LOSS-RC-004-P01",
+        change_id="RC-004",
+        kind=MaterialLossKind.PARAGRAPH,
+        excerpt="Useful existing knowledge.",
+        source_content_sha256="a" * 64,
+        disposition=IssueResolutionDisposition.ISSUE_EXPLICITLY_ACCEPTED,
+        decision_id="HR-002",
+    )
+    risk = AcceptedRisk(
+        id="RISK-HR-002-01",
+        category=DecisionCategory.CONTENT_PRESERVATION,
+        change_ids=["RC-004"],
+        issue_ids=["RC-004-I01"],
+        material_loss_ids=[loss.id],
+        decision_id="HR-002",
+        selected_option="ACKNOWLEDGE_CONTENT_LOSS",
+        description="The exact prior paragraph is intentionally omitted.",
+        evidence=[loss.excerpt],
+    )
+
+    assert DependencyRecord.model_validate_json(dependency.model_dump_json()) == dependency
+    assert IdentityCollision.model_validate_json(collision.model_dump_json()) == collision
+    assert MaterialLossRecord.model_validate_json(loss.model_dump_json()) == loss
+    assert AcceptedRisk.model_validate_json(risk.model_dump_json()) == risk
+    assert dependency.target_state.value == "TARGET_CREATED_IN_BATCH"
+    assert claim.kind.value == "ALIAS"
+    assert loss.disposition.value == "ISSUE_EXPLICITLY_ACCEPTED"
+
+
+def test_v11_decision_option_records_machine_effect_and_human_consequence():
+    option = DecisionOption(
+        key="KEEP_SEPARATE",
+        label="Keep both concepts separate",
+        effect=DecisionEffect.KEEP_SEPARATE,
+        consequence=(
+            "Create Classification and remove only the conflicting Classification alias "
+            "from Predictive Classification."
+        ),
+    )
+    decision = HumanDecision(
+        id="HR-001",
+        change_ids=["RC-001", "RC-002"],
+        issue_ids=["RC-001-I01", "RC-002-I01"],
+        category=DecisionCategory.CONCEPT_IDENTITY.value,
+        status=DecisionStatus.PENDING,
+        question="Should the two concepts remain separate?",
+        context="The proposed title collides with an existing alias.",
+        agent_a_position="Create Classification separately.",
+        agent_b_position="Resolve the identity boundary.",
+        options=[option],
+        blocking=True,
+    )
+
+    assert decision.options[0].consequence.startswith("Create Classification")
+    assert decision.blocking is True
+    assert HumanDecision.model_validate_json(decision.model_dump_json()) == decision
+
+
+def test_v11_final_change_set_additive_collections_default_empty_for_v1_payloads():
+    result = FinalChangeSet(
+        source_run_id="run_1",
+        reconciliation_version="reconciliation-v1",
+        provenance={},
+        input_sha256={},
+        pre_review_adjustments=[],
+        changes=[],
+        human_decisions=[],
+        unresolved_decision_ids=[],
+        validation_findings=[],
+        state=FinalChangeSetState.READY_FOR_WRITE,
+    )
+
+    assert result.dependencies == []
+    assert result.identity_collisions == []
+    assert result.accepted_risks == []
+    assert result.applicable_change_ids == []
 
 
 def test_loader_preserves_original_and_reviewed_proposal_hashes_and_adjustment(tmp_path: Path):

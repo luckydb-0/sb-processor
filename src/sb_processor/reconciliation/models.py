@@ -21,6 +21,12 @@ class IssueOutcome(str, Enum):
     INVALID = "INVALID"
 
 
+class IssueResolutionDisposition(str, Enum):
+    ISSUE_FIXED = "ISSUE_FIXED"
+    ISSUE_EXPLICITLY_ACCEPTED = "ISSUE_EXPLICITLY_ACCEPTED"
+    ISSUE_UNRESOLVED = "ISSUE_UNRESOLVED"
+
+
 class PatchKind(str, Enum):
     REMOVE = "REMOVE"
     REPLACE = "REPLACE"
@@ -53,6 +59,7 @@ class ReconciledIssue(StrictModel):
     outcome: IssueOutcome
     patches: list[PatchOperation] = Field(default_factory=list)
     human_decision_id: str | None = None
+    resolution: IssueResolutionDisposition = IssueResolutionDisposition.ISSUE_UNRESOLVED
 
 
 class ReconciledChangeStatus(str, Enum):
@@ -60,6 +67,7 @@ class ReconciledChangeStatus(str, Enum):
     FIXED = "FIXED"
     BLOCKED = "BLOCKED"
     DEFERRED = "DEFERRED"
+    SKIPPED = "SKIPPED"
     INVALID = "INVALID"
 
 
@@ -73,6 +81,70 @@ class ValidationFinding(StrictModel):
     severity: ValidationSeverity
     message: str
     change_ids: list[str] = Field(default_factory=list)
+
+
+class DependencyTargetState(str, Enum):
+    TARGET_EXISTS_IN_VAULT = "TARGET_EXISTS_IN_VAULT"
+    TARGET_CREATED_IN_BATCH = "TARGET_CREATED_IN_BATCH"
+    TARGET_UPDATED_IN_BATCH = "TARGET_UPDATED_IN_BATCH"
+    TARGET_DEFERRED = "TARGET_DEFERRED"
+    TARGET_SKIPPED = "TARGET_SKIPPED"
+    TARGET_MISSING = "TARGET_MISSING"
+    TARGET_AMBIGUOUS = "TARGET_AMBIGUOUS"
+
+
+class DependencyRecord(StrictModel):
+    id: str
+    source_change_id: str
+    source_path: str
+    token: str
+    normalized_target: str
+    target_state: DependencyTargetState
+    target_path: str | None = None
+    target_change_id: str | None = None
+    blocking: bool
+    root_decision_id: str | None = None
+
+
+class IdentityClaimKind(str, Enum):
+    CANONICAL_PATH = "CANONICAL_PATH"
+    BASENAME = "BASENAME"
+    TITLE = "TITLE"
+    ALIAS = "ALIAS"
+
+
+class IdentityClaim(StrictModel):
+    value: str
+    normalized: str
+    kind: IdentityClaimKind
+    canonical_path: str
+    change_id: str | None = None
+    from_existing_vault: bool
+
+
+class IdentityCollision(StrictModel):
+    id: str
+    normalized_identity: str
+    claims: list[IdentityClaim]
+    change_ids: list[str] = Field(default_factory=list)
+    dependent_change_ids: list[str] = Field(default_factory=list)
+    blocking: bool
+    human_decision_id: str | None = None
+
+
+class MaterialLossKind(str, Enum):
+    HEADING = "HEADING"
+    PARAGRAPH = "PARAGRAPH"
+
+
+class MaterialLossRecord(StrictModel):
+    id: str
+    change_id: str
+    kind: MaterialLossKind
+    excerpt: str
+    source_content_sha256: str
+    disposition: IssueResolutionDisposition = IssueResolutionDisposition.ISSUE_UNRESOLVED
+    decision_id: str | None = None
 
 
 class ReconciledChange(StrictModel):
@@ -94,6 +166,8 @@ class ReconciledChange(StrictModel):
     final_content_sha256: str | None = None
     status: ReconciledChangeStatus
     validation_findings: list[ValidationFinding] = Field(default_factory=list)
+    dependencies: list[DependencyRecord] = Field(default_factory=list)
+    material_losses: list[MaterialLossRecord] = Field(default_factory=list)
 
 
 class DecisionEffect(str, Enum):
@@ -101,6 +175,18 @@ class DecisionEffect(str, Enum):
     REMOVE_LINK = "REMOVE_LINK"
     SKIP_CHANGE = "SKIP_CHANGE"
     DEFER = "DEFER"
+    KEEP_SEPARATE = "KEEP_SEPARATE"
+    ACKNOWLEDGE_CONTENT_LOSS = "ACKNOWLEDGE_CONTENT_LOSS"
+    ACCEPT_STAGED_RISK = "ACCEPT_STAGED_RISK"
+
+
+class DecisionCategory(str, Enum):
+    CONCEPT_IDENTITY = "CONCEPT_IDENTITY"
+    MERGE_OR_SEPARATE = "MERGE_OR_SEPARATE"
+    CONTENT_PRESERVATION = "CONTENT_PRESERVATION"
+    STRUCTURAL_CHANGE = "STRUCTURAL_CHANGE"
+    UNRESOLVED_DEPENDENCY = "UNRESOLVED_DEPENDENCY"
+    SEMANTIC_RISK = "SEMANTIC_RISK"
 
 
 class DecisionStatus(str, Enum):
@@ -113,6 +199,7 @@ class DecisionOption(StrictModel):
     key: str
     label: str
     effect: DecisionEffect
+    consequence: str = ""
 
 
 class HumanDecision(StrictModel):
@@ -130,6 +217,19 @@ class HumanDecision(StrictModel):
     confidence: str | None = None
     options: list[DecisionOption]
     selected_option: str | None = None
+    blocking: bool = True
+
+
+class AcceptedRisk(StrictModel):
+    id: str
+    category: DecisionCategory
+    change_ids: list[str]
+    issue_ids: list[str] = Field(default_factory=list)
+    material_loss_ids: list[str] = Field(default_factory=list)
+    decision_id: str
+    selected_option: str
+    description: str
+    evidence: list[str] = Field(default_factory=list)
 
 
 class PreReviewAdjustment(StrictModel):
@@ -155,6 +255,10 @@ class FinalChangeSet(StrictModel):
     unresolved_decision_ids: list[str]
     validation_findings: list[ValidationFinding]
     state: FinalChangeSetState
+    dependencies: list[DependencyRecord] = Field(default_factory=list)
+    identity_collisions: list[IdentityCollision] = Field(default_factory=list)
+    accepted_risks: list[AcceptedRisk] = Field(default_factory=list)
+    applicable_change_ids: list[str] = Field(default_factory=list)
 
 
 class ReconciliationResult(StrictModel):
