@@ -130,13 +130,22 @@ excluded from the note-content manifest and is not attributed to reconciliation.
 
 ## Verification
 
-- Focused reconciliation suite: 104 passed.
-- Reconciliation/CLI/review/processing/knowledge suite: 224 passed.
-- Full repository suite before final review: 281 passed, 1 skipped.
+- Focused reconciliation suite: 108 passed.
+- Reconciliation/CLI/review/processing/knowledge suite: 228 passed.
+- Full repository suite after the final review fixes: 285 passed, 1 skipped.
 
-The final branch verification reruns both relevant and full suites after this document and any
-review fixes. All tests and demonstrations remain staging-only; no vault writer, Git commit to a
-vault, SQLite update, or Qdrant update exists in v1.1.
+The whole-branch safety review found four fail-closed gaps and each received a RED-to-GREEN
+regression before this final run:
+
+- a post-selection UPDATE that introduces a new global identity collision is excluded and its
+  dependencies are recomputed;
+- `KEEP_SEPARATE` conflict and atomicity checks use both exact transformation participants rather
+  than inferring participants from issue IDs;
+- generic existing-note approval is no longer an executable option; and
+- the exact vault bytes used by `KEEP_SEPARATE` must still match the scanned source hash.
+
+All tests and demonstrations remain staging-only; no vault writer, Git commit to a vault, SQLite
+update, or Qdrant update exists in v1.1.
 
 ## Non-blocking limitations
 
@@ -144,5 +153,8 @@ vault, SQLite update, or Qdrant update exists in v1.1.
   proposed graph rather than pretending an unsafe partial batch is writable.
 - Complex semantic merging remains unsupported and blocked; `MERGE` is intentionally absent.
 - Explicit risk acceptance records authorization but does not repair prose.
+- The supported inline alias patch reconstructs the alias list and may normalize unusual spacing
+  around unaffected aliases. This is an audited formatting limitation, not a knowledge-loss or
+  readiness bypass; exact semantic contents and all unrelated note bytes are preserved.
 - A future Safe Vault Writer still needs its own atomic filesystem, hash, backup, and Git safety
   contract. It must not reinterpret reconciliation decisions.

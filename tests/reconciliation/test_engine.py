@@ -139,6 +139,21 @@ def test_agent_b_review_required_without_issues_still_requires_human_decision(tm
     assert result.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
 
 
+def test_generic_existing_note_approval_is_not_an_executable_option(tmp_path: Path):
+    inputs = loaded_inputs(
+        tmp_path,
+        [change(action="REVIEW_REQUIRED")],
+        [reviewed_change("Dots/Topic.md", status="REVIEW_REQUIRED")],
+    )
+
+    pending = reconcile(inputs)
+    decision = pending.final_change_set.human_decisions[0]
+
+    assert [option.key for option in decision.options] == ["SKIP_CHANGE", "DEFER"]
+    with pytest.raises(ValueError, match="Invalid option for HR-001"):
+        reconcile(inputs, {"HR-001": "APPLY_RECONCILED_CHANGE"})
+
+
 def test_agent_b_review_required_with_only_auto_fixes_still_requires_human_decision(
         tmp_path: Path):
     content = (
@@ -330,23 +345,27 @@ def test_review_required_resolution_infers_update_only_when_target_exists(tmp_pa
     )
 
     pending = reconcile(inputs)
-    resolved = reconcile(inputs, {"HR-001": "APPLY_RECONCILED_CHANGE"})
 
     assert pending.final_change_set.changes[0].final_action.value == "UPDATE"
-    assert resolved.final_change_set.changes[0].final_action.value == "UPDATE"
-    assert resolved.final_change_set.changes[0].final_content == content
+    assert [option.key for option in pending.final_change_set.human_decisions[0].options] == [
+        "SKIP_CHANGE", "DEFER"
+    ]
 
 
-def test_resolved_review_required_infers_create_when_target_is_absent(tmp_path: Path):
+def test_review_required_infers_create_but_requires_skip_or_defer_when_target_is_absent(
+        tmp_path: Path):
     inputs = loaded_inputs(
         tmp_path,
         [change(action="REVIEW_REQUIRED")],
         [reviewed_change("Dots/Topic.md", status="REVIEW_REQUIRED")],
     )
 
-    result = reconcile(inputs, {"HR-001": "APPLY_RECONCILED_CHANGE"})
+    result = reconcile(inputs)
 
     assert result.final_change_set.changes[0].final_action.value == "CREATE"
+    assert [option.key for option in result.final_change_set.human_decisions[0].options] == [
+        "SKIP_CHANGE", "DEFER"
+    ]
 
 
 def test_decision_resolution_rejects_unknown_ids_and_options(tmp_path: Path):
@@ -838,3 +857,120 @@ def test_conflicting_shared_and_semantic_decisions_are_rejected_independent_of_o
     ):
         with pytest.raises(ValueError, match="Conflicting decision effects"):
             reconcile(inputs, selections)
+
+
+def test_keep_separate_conflict_checks_both_transformation_participants(tmp_path: Path):
+    existing = (
+        "---\ntype: concept\naliases: [Classification, Predictive Classifier]\n"
+        "maps: []\n---\n# Predictive Classification\nExisting definition.\n"
+    )
+    existing_hash = hashlib.sha256(existing.encode()).hexdigest()
+    issues = [
+        review_issue(
+            "Dots/Classification.md",
+            "claim_strength",
+            "Defer the unsupported definition",
+            explanation="The proposed Classification definition is too broad.",
+        ),
+        review_issue(
+            "Dots/Predictive Classification.md",
+            "existing_note",
+            "Resolve ownership of the Classification alias",
+            explanation="Predictive Classification currently owns the Classification alias.",
+        ),
+    ]
+    inputs = loaded_inputs(
+        tmp_path,
+        [
+            change(
+                path="Dots/Classification.md",
+                action="REVIEW_REQUIRED",
+                content="---\ntype: concept\naliases: []\n---\n# Classification\nNew.\n",
+            ),
+            change(
+                path="Dots/Predictive Classification.md",
+                action="REVIEW_REQUIRED",
+                content="",
+                original_content_hash=existing_hash,
+            ),
+        ],
+        [
+            reviewed_change(
+                "Dots/Classification.md", status="REVIEW_REQUIRED", issue_indices=[0]
+            ),
+            reviewed_change(
+                "Dots/Predictive Classification.md",
+                status="REVIEW_REQUIRED",
+                issue_indices=[1],
+            ),
+        ],
+        issues,
+        vault_contents={"Dots/Predictive Classification.md": existing},
+    )
+    pending = reconcile(inputs)
+    identity = next(
+        item for item in pending.final_change_set.human_decisions
+        if item.category == DecisionCategory.CONCEPT_IDENTITY.value
+    )
+    semantic = next(
+        item for item in pending.final_change_set.human_decisions
+        if item.category == DecisionCategory.SEMANTIC_RISK.value
+    )
+
+    assert identity.issue_ids == ["RC-002-I01"]
+    with pytest.raises(ValueError, match="Conflicting decision effects"):
+        reconcile(inputs, {identity.id: "KEEP_SEPARATE", semantic.id: "DEFER"})
+
+
+def test_post_selection_identity_collision_is_excluded_from_ready_subset(tmp_path: Path):
+    existing_topic = "---\ntype: concept\naliases: []\n---\n# Topic\nDurable body.\n"
+    updated_topic = (
+        "---\ntype: concept\naliases: [Collision]\n---\n# Topic\nDurable body.\n"
+    )
+    issues = [review_issue(
+        "Dots/Topic.md",
+        "claim_strength",
+        "Confirm the proposed alias",
+        explanation="The proposed alias requires explicit semantic acceptance.",
+    )]
+    inputs = loaded_inputs(
+        tmp_path,
+        [change(
+            path="Dots/Topic.md",
+            action="UPDATE",
+            content=updated_topic,
+            original_content_hash=hashlib.sha256(existing_topic.encode()).hexdigest(),
+        )],
+        [reviewed_change("Dots/Topic.md", status="REVIEW_REQUIRED", issue_indices=[0])],
+        issues,
+        vault_contents={
+            "Dots/Topic.md": existing_topic,
+            "Dots/Collision.md": "---\ntype: concept\n---\n# Collision\nExisting.\n",
+        },
+    )
+    pending = reconcile(inputs)
+    decision = pending.final_change_set.human_decisions[0]
+
+    result = reconcile(inputs, {decision.id: "ACCEPT_STAGED_RISK"})
+
+    assert result.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
+    assert result.final_change_set.applicable_change_ids == []
+    assert result.final_change_set.changes[0].status is ReconciledChangeStatus.BLOCKED
+    assert not [
+        collision for collision in result.final_change_set.identity_collisions
+        if collision.blocking
+    ]
+
+
+def test_keep_separate_is_not_offered_if_vault_bytes_change_after_scan(tmp_path: Path):
+    inputs = classification_identity_inputs(tmp_path)
+    target = inputs.vault / "Dots/Predictive Classification.md"
+    target.write_text(target.read_text(encoding="utf-8") + "Concurrent edit.\n", encoding="utf-8")
+
+    pending = reconcile(inputs)
+
+    identity = next(
+        item for item in pending.final_change_set.human_decisions
+        if item.category == DecisionCategory.CONCEPT_IDENTITY.value
+    )
+    assert [option.key for option in identity.options] == ["DEFER"]

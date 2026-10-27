@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -262,7 +263,10 @@ def plan_keep_separate(
             or existing_change.expected_existing_content_sha256 != scanned.content_hash):
         return None
     target = Path(inputs.vault) / existing_claim.canonical_path
-    existing_content = target.read_text(encoding="utf-8")
+    existing_bytes = target.read_bytes()
+    if hashlib.sha256(existing_bytes).hexdigest() != scanned.content_hash:
+        return None
+    existing_content = existing_bytes.decode("utf-8")
     patch = _exact_alias_patch(existing_content, existing_claim.value)
     if patch is None:
         return None
