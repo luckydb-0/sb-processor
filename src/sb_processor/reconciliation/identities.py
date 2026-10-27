@@ -109,6 +109,10 @@ def _effective_notes(inputs: ReconciliationInputs,
         if (change.status is ReconciledChangeStatus.BLOCKED
                 and change.final_action is Action.UPDATE):
             continue
+        if (change.status is ReconciledChangeStatus.BLOCKED
+                and change.final_action is Action.CREATE
+                and not change.human_decision_required):
+            continue
         path = change.final_target_path or change.original_target_path
         title, aliases = _content_identity(path, change.final_content)
         existing = notes.get(path)

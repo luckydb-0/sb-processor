@@ -112,13 +112,14 @@ def test_multiple_issues_keep_independent_outcomes_and_block_only_for_ambiguous_
     result = reconcile(inputs)
 
     reconciled = result.final_change_set.changes[0]
-    assert [item.outcome for item in reconciled.issues] == [
+    assert [item.outcome for item in reconciled.issues[:2]] == [
         IssueOutcome.APPLIED,
         IssueOutcome.HUMAN_REQUIRED,
     ]
+    assert reconciled.issues[2].explanation == "Unresolved wikilink: [[Lecture 01]]"
     assert reconciled.status is ReconciledChangeStatus.BLOCKED
     assert reconciled.human_decision_required is True
-    assert reconciled.human_decision_ids == ["HR-001"]
+    assert set(reconciled.human_decision_ids) == {"HR-001", "HR-002"}
     assert result.final_change_set.human_decisions[0].issue_ids == ["RC-001-I02"]
 
 
@@ -185,28 +186,23 @@ def test_pending_decision_is_narrow_stable_and_blocks_final_state(tmp_path: Path
     decision = result.final_change_set.human_decisions[0]
     assert decision.id == "HR-001"
     assert decision.status is DecisionStatus.PENDING
-    assert decision.question == "Should `Dots/Topic.md` keep the unresolved wikilink `[[Statistics]]`?"
+    assert decision.category == DecisionCategory.UNRESOLVED_DEPENDENCY.value
+    assert decision.question == (
+        "How should the unresolved dependency `[[Statistics]]` be handled across 1 "
+        "affected change(s)?"
+    )
     assert [option.key for option in decision.options] == [
-        "APPLY_RECONCILED_CHANGE", "REMOVE_LINK", "SKIP_CHANGE", "DEFER"
+        "REMOVE_LINK", "SKIP_CHANGE", "DEFER"
     ]
     assert result.final_change_set.unresolved_decision_ids == ["HR-001"]
     assert result.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
 
 
-def test_resolved_decision_can_apply_reconciled_content_without_llm_reinterpretation(tmp_path: Path):
+def test_unresolved_dependency_cannot_be_generically_approved(tmp_path: Path):
     inputs = unresolved_link_inputs(tmp_path)
 
-    result = reconcile(inputs, {"HR-001": "APPLY_RECONCILED_CHANGE"})
-
-    decision = result.final_change_set.human_decisions[0]
-    reconciled = result.final_change_set.changes[0]
-    assert decision.status is DecisionStatus.RESOLVED
-    assert decision.selected_option == "APPLY_RECONCILED_CHANGE"
-    assert reconciled.issues[0].outcome is IssueOutcome.SKIPPED_WITH_HUMAN_APPROVAL
-    assert reconciled.final_action.value == "CREATE"
-    assert "[[Statistics]]" in reconciled.final_content
-    assert reconciled.human_decision_required is False
-    assert result.final_change_set.unresolved_decision_ids == []
+    with pytest.raises(ValueError, match="Invalid option for HR-001"):
+        reconcile(inputs, {"HR-001": "APPLY_RECONCILED_CHANGE"})
 
 
 def test_resolved_link_decision_can_remove_only_wikilink_markup(tmp_path: Path):
@@ -257,9 +253,16 @@ def test_remove_link_is_not_offered_when_one_decision_names_different_links(tmp_
 
     result = reconcile(inputs)
 
-    assert "REMOVE_LINK" not in [
-        option.key for option in result.final_change_set.human_decisions[0].options
+    dependency_decisions = [
+        item for item in result.final_change_set.human_decisions
+        if item.category == DecisionCategory.UNRESOLVED_DEPENDENCY.value
     ]
+    assert len(dependency_decisions) == 2
+    assert all([option.key for option in item.options] == [
+        "REMOVE_LINK", "SKIP_CHANGE", "DEFER"
+    ] for item in dependency_decisions)
+    assert result.final_change_set.changes[0].issues[0].human_decision_id is None
+    assert result.final_change_set.changes[0].issues[0].resolution.value == "ISSUE_FIXED"
 
 
 def test_local_link_removal_is_ordered_before_a_whole_change_defer(tmp_path: Path):
@@ -390,6 +393,42 @@ def test_pending_change_is_not_invalidated_by_the_issue_waiting_for_human_decisi
     assert result.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
     assert not [item for item in result.final_change_set.validation_findings
                 if item.severity.value == "ERROR"]
+
+
+def test_semantic_concern_requires_specific_risk_acceptance_and_is_audited(tmp_path: Path):
+    issues = [review_issue(
+        "Dots/Topic.md",
+        "claim_strength",
+        "Confirm or remove the unsupported generalization",
+        explanation="The staged definition is broader than the supplied evidence.",
+    )]
+    inputs = loaded_inputs(
+        tmp_path,
+        [change()],
+        [reviewed_change("Dots/Topic.md", status="REVIEW_REQUIRED", issue_indices=[0])],
+        issues,
+    )
+
+    pending = reconcile(inputs)
+    decision = pending.final_change_set.human_decisions[0]
+    assert decision.category == DecisionCategory.SEMANTIC_RISK.value
+    assert [item.key for item in decision.options] == [
+        "ACCEPT_STAGED_RISK", "SKIP_CHANGE", "DEFER"
+    ]
+    assert "claim_strength concern" in decision.question
+    with pytest.raises(ValueError, match="Invalid option"):
+        reconcile(inputs, {decision.id: "APPLY_RECONCILED_CHANGE"})
+
+    accepted = reconcile(inputs, {decision.id: "ACCEPT_STAGED_RISK"})
+    assert accepted.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
+    assert accepted.final_change_set.applicable_change_ids == ["RC-001"]
+    assert accepted.final_change_set.accepted_risks[0].decision_id == decision.id
+    assert accepted.final_change_set.accepted_risks[0].evidence == [
+        "The staged definition is broader than the supplied evidence."
+    ]
+    assert accepted.final_change_set.changes[0].issues[0].resolution is (
+        IssueResolutionDisposition.ISSUE_EXPLICITLY_ACCEPTED
+    )
 
 
 def test_update_paragraph_loss_generates_preservation_decision(tmp_path: Path):
@@ -635,6 +674,10 @@ def test_dependency_decisions_do_not_cascade_through_still_pending_creates(tmp_p
         ["RC-001", "RC-002"]
     ]
     assert pending.final_change_set.changes[2].human_decision_ids == []
+    assert pending.final_change_set.changes[2].status is ReconciledChangeStatus.BLOCKED
+    assert pending.final_change_set.changes[2].dependencies[0].target_state.value == (
+        "TARGET_DEFERRED"
+    )
 
 
 def classification_identity_inputs(

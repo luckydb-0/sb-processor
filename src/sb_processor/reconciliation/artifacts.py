@@ -146,6 +146,15 @@ def _write_diff(root: Path, inputs: ReconciliationInputs, change) -> str:
 
 def _write_preview(root: Path, result: ReconciliationResult, inputs: ReconciliationInputs) -> str:
     final = result.final_change_set
+    dependency_groups: dict[tuple[str, str, str | None, str | None], list] = {}
+    for dependency in final.dependencies:
+        key = (
+            dependency.normalized_target,
+            dependency.target_state.value,
+            dependency.target_path,
+            dependency.root_decision_id,
+        )
+        dependency_groups.setdefault(key, []).append(dependency)
     groups: dict[str, list[str]] = {
         "CREATE": [],
         "UPDATE": [],
@@ -186,8 +195,13 @@ def _write_preview(root: Path, result: ReconciliationResult, inputs: Reconciliat
     lines.extend(["## Accepted risks", ""])
     if final.accepted_risks:
         for risk in final.accepted_risks:
+            applies = any(
+                change_id in final.applicable_change_ids for change_id in risk.change_ids
+            )
+            scope = "" if applies else " (affected changes are excluded from the applicable subset)"
             lines.append(
-                f"- `{risk.id}` authorized by `{risk.decision_id}` — {risk.description}"
+                f"- `{risk.id}` authorized by `{risk.decision_id}` — "
+                f"{risk.description}{scope}"
             )
             if risk.material_loss_ids:
                 lines.append(
@@ -207,31 +221,37 @@ def _write_preview(root: Path, result: ReconciliationResult, inputs: Reconciliat
             blocking.append(
                 f"- `{collision.id}` — ambiguous identity `{collision.normalized_identity}`"
             )
-    for dependency in final.dependencies:
-        if dependency.blocking:
+    for (normalized, state, target_path, root_id), records in dependency_groups.items():
+        if records[0].blocking:
+            sources = sorted({item.source_path for item in records})
+            occurrence = "occurrence" if len(records) == 1 else "occurrences"
             blocking.append(
-                f"- `{dependency.id}` — `{dependency.source_path}` uses "
-                f"`{dependency.token}`: `{dependency.target_state.value}`"
+                f"- Dependency `{records[0].token}` (`{normalized}`): `{state}` — "
+                f"{len(records)} {occurrence} "
+                f"across {len(sources)} change(s)"
+                + (f"; target `{target_path}`" if target_path else "")
+                + (f"; root decision `{root_id}`" if root_id else "")
             )
     for change in final.changes:
         for loss in change.material_losses:
-            if loss.disposition.value == "ISSUE_UNRESOLVED":
+            if (loss.disposition.value == "ISSUE_UNRESOLVED"
+                    and loss.decision_id in final.unresolved_decision_ids):
                 blocking.append(
                     f"- `{loss.id}` — unacknowledged {loss.kind.value.lower()} loss in "
                     f"`{change.final_target_path or change.original_target_path}`"
                 )
     lines.extend(blocking or ["None."])
     lines.extend(["", "## Dependencies", ""])
-    if final.dependencies:
-        for dependency in final.dependencies:
-            target = f" → `{dependency.target_path}`" if dependency.target_path else ""
-            root_decision = (
-                f"; root decision `{dependency.root_decision_id}`"
-                if dependency.root_decision_id else ""
-            )
+    if dependency_groups:
+        for (normalized, state, target_path, root_id), records in dependency_groups.items():
+            sources = sorted({item.source_path for item in records})
+            target = f"; target `{target_path}`" if target_path else ""
+            root_decision = f"; root decision `{root_id}`" if root_id else ""
+            occurrence = "occurrence" if len(records) == 1 else "occurrences"
             lines.append(
-                f"- `{dependency.source_path}`: `{dependency.token}` → "
-                f"`{dependency.target_state.value}`{target}{root_decision}"
+                f"- `{records[0].token}` (`{normalized}`) → `{state}` — "
+                f"{len(records)} {occurrence} across "
+                f"{len(sources)} change(s){target}{root_decision}"
             )
     else:
         lines.append("None.")

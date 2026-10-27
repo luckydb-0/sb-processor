@@ -81,20 +81,20 @@ def test_human_review_is_concise_and_contains_machine_matching_decisions(tmp_pat
     assert "Automatically ready: 2" in markdown
     assert "Needs your decision: 1" in markdown
     assert "HR-001" in markdown
-    assert "Should `Dots/Blocked.md` keep the unresolved wikilink `[[Missing]]`?" in markdown
+    assert "How should the unresolved dependency `[[Missing]]` be handled" in markdown
     assert "**Blocking:** `yes`" in markdown
     assert "**Affected changes**" in markdown
     assert "`Dots/Blocked.md`" in markdown
     assert "**Evidence**" in markdown
-    assert "Unresolved wikilink: [[Missing]]" in markdown
+    assert "TARGET_MISSING" in markdown
     assert "REMOVE_LINK" in markdown
-    assert "Remove only the exact wikilink markup" in markdown
+    assert "Remove every listed exact wikilink markup occurrence" in markdown
     assert "developer" not in markdown.casefold()
     assert machine["decisions"][0]["id"] == "HR-001"
     assert machine["decisions"][0]["status"] == "PENDING"
     assert machine["decisions"][0]["selected_option"] is None
     assert [item["key"] for item in machine["decisions"][0]["options"]] == [
-        "APPLY_RECONCILED_CHANGE", "REMOVE_LINK", "SKIP_CHANGE", "DEFER"
+        "REMOVE_LINK", "SKIP_CHANGE", "DEFER"
     ]
 
 

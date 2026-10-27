@@ -19,6 +19,7 @@ from .models import (
     DecisionCategory,
     DecisionOption,
     DecisionStatus,
+    DependencyTargetState,
     FinalChangeSet,
     FinalChangeSetState,
     HumanDecision,
@@ -65,24 +66,51 @@ def _decision(decision_id: str, change_id: str, issue: ReconciledIssue,
               change: NoteChange) -> HumanDecision:
     unresolved_links = _unresolved_link_tokens(issue.explanation)
     unresolved_link = unresolved_links[0] if len(unresolved_links) == 1 else None
+    semantic_types = {
+        "claim_strength",
+        "concept_boundary",
+        "source_fidelity",
+        "source_independent_wording",
+        "source_specific_result",
+    }
+    semantic_risk = issue.issue_type.value in semantic_types
     if unresolved_link:
         question = f"Should `{change.target_path}` keep the unresolved wikilink `{unresolved_link}`?"
     elif issue.issue_type.value == "alias":
         question = f"Should `{change.target_path}` keep the alias questioned by Agent B?"
-    elif issue.issue_type.value in ("concept_boundary", "existing_note"):
+    elif issue.issue_type.value == "existing_note":
         question = f"Should `{change.target_path}` be applied as the separate change Agent A proposed?"
     elif issue.issue_type.value == "cumulative_integrity":
         question = f"Should `{change.target_path}` proceed even though it does not preserve all existing useful content?"
+    elif semantic_risk:
+        question = (
+            f"Should `{change.target_path}` retain the staged text despite Agent B's "
+            f"{issue.issue_type.value} concern?"
+        )
     else:
         question = f"Should `{change.target_path}` proceed with this unresolved {issue.issue_type.value} issue?"
-    options = [
-        DecisionOption(key="APPLY_RECONCILED_CHANGE", label="Apply the staged change",
-                       effect=DecisionEffect.APPLY_RECONCILED_CHANGE,
-                       consequence=(
-                           "Apply the staged note content, subject to all mandatory "
-                           "pre-write validations."
-                       )),
-    ]
+    can_apply = bool(change.content.strip())
+    if semantic_risk and can_apply:
+        options = [DecisionOption(
+            key="ACCEPT_STAGED_RISK",
+            label="Accept this specific staged risk",
+            effect=DecisionEffect.ACCEPT_STAGED_RISK,
+            consequence=(
+                "Keep the contested staged text, record this exact concern as an accepted "
+                "risk, and run every mandatory validator."
+            ),
+        )]
+    elif can_apply:
+        options = [DecisionOption(
+            key="APPLY_RECONCILED_CHANGE",
+            label="Apply the staged change",
+            effect=DecisionEffect.APPLY_RECONCILED_CHANGE,
+            consequence=(
+                "Apply the staged note content, subject to all mandatory pre-write validations."
+            ),
+        )]
+    else:
+        options = []
     if unresolved_link and unresolved_link in change.content:
         options.append(DecisionOption(
             key="REMOVE_LINK",
@@ -111,7 +139,8 @@ def _decision(decision_id: str, change_id: str, issue: ReconciledIssue,
         id=decision_id,
         change_ids=[change_id],
         issue_ids=[issue.id],
-        category=issue.issue_type.value,
+        category=(DecisionCategory.SEMANTIC_RISK.value
+                  if semantic_risk else issue.issue_type.value),
         status=DecisionStatus.PENDING,
         question=question,
         context=issue.explanation,
@@ -372,6 +401,118 @@ def _reconcile_dependency_decisions(
             issue.human_decision_id = root.id
         source.human_decision_required = True
         source.status = ReconciledChangeStatus.BLOCKED
+
+    unresolved_groups: dict[str, list] = {}
+    for dependency in dependencies:
+        if (dependency.root_decision_id is None
+                and dependency.target_state in {
+                    DependencyTargetState.TARGET_MISSING,
+                    DependencyTargetState.TARGET_AMBIGUOUS,
+                }):
+            unresolved_groups.setdefault(dependency.normalized_target, []).append(dependency)
+
+    for normalized_target in sorted(unresolved_groups):
+        records = unresolved_groups[normalized_target]
+        old_ids: set[str] = set()
+        affected_issues: dict[str, ReconciledIssue] = {}
+        for dependency in records:
+            source = change_by_id[dependency.source_change_id]
+            raw_matches = [
+                issue for issue in source.issues
+                if dependency.token in _unresolved_link_tokens(issue.explanation)
+            ]
+            matches = [
+                issue for issue in raw_matches
+                if len(_unresolved_link_tokens(issue.explanation)) == 1
+            ]
+            for issue in raw_matches:
+                if issue in matches:
+                    continue
+                if issue.human_decision_id is not None:
+                    old_ids.add(issue.human_decision_id)
+                issue.human_decision_id = None
+                issue.outcome = IssueOutcome.APPLIED
+                issue.resolution = IssueResolutionDisposition.ISSUE_FIXED
+            if not matches:
+                synthetic = ReconciledIssue(
+                    id=f"{source.id}-I{len(source.issues) + 1:02d}",
+                    agent_b_issue_index=-1,
+                    issue_type="link",
+                    explanation=f"Unresolved wikilink: {dependency.token}",
+                    proposed_correction="Resolve, remove, skip, or defer this dependency",
+                    classification=IssueClassification.AMBIGUOUS,
+                    outcome=IssueOutcome.HUMAN_REQUIRED,
+                )
+                source.issues.append(synthetic)
+                matches = [synthetic]
+            for issue in matches:
+                affected_issues[issue.id] = issue
+                if issue.human_decision_id is not None:
+                    old_ids.add(issue.human_decision_id)
+        root_id = sorted(old_ids)[0] if old_ids else _next_decision_id(decisions)
+        _drop_decisions(decisions, old_ids)
+        affected_change_ids = sorted({item.source_change_id for item in records})
+        for change_id in affected_change_ids:
+            source = change_by_id[change_id]
+            source.human_decision_ids = [
+                item for item in source.human_decision_ids if item not in old_ids
+            ]
+            if root_id not in source.human_decision_ids:
+                source.human_decision_ids.append(root_id)
+            source.human_decision_required = True
+            source.status = ReconciledChangeStatus.BLOCKED
+        for issue in affected_issues.values():
+            issue.human_decision_id = root_id
+        for dependency in records:
+            dependency.root_decision_id = root_id
+        token = records[0].token
+        decisions.append(HumanDecision(
+            id=root_id,
+            change_ids=affected_change_ids,
+            issue_ids=sorted(affected_issues),
+            category=DecisionCategory.UNRESOLVED_DEPENDENCY.value,
+            status=DecisionStatus.PENDING,
+            question=(
+                f"How should the unresolved dependency `{token}` be handled across "
+                f"{len(affected_change_ids)} affected change(s)?"
+            ),
+            context="\n".join(
+                f"- `{item.source_path}`: `{item.target_state.value}`"
+                for item in records
+            ),
+            agent_a_position="Retain the wikilink in the staged notes.",
+            agent_b_position="Do not write an unresolved or ambiguous link target.",
+            recommendation="DEFER",
+            rationale="No single safe canonical target is mechanically proven.",
+            confidence="high",
+            options=[
+                DecisionOption(
+                    key="REMOVE_LINK",
+                    label="Remove the unresolved link markup",
+                    effect=DecisionEffect.REMOVE_LINK,
+                    consequence=(
+                        "Remove every listed exact wikilink markup occurrence, preserve "
+                        "visible text, and revalidate all affected notes."
+                    ),
+                ),
+                DecisionOption(
+                    key="SKIP_CHANGE",
+                    label="Skip all affected changes",
+                    effect=DecisionEffect.SKIP_CHANGE,
+                    consequence="Exclude every directly affected change.",
+                ),
+                DecisionOption(
+                    key="DEFER",
+                    label="Defer all affected changes",
+                    effect=DecisionEffect.DEFER,
+                    consequence=(
+                        "Exclude every directly affected change and recompute downstream "
+                        "dependencies."
+                    ),
+                ),
+            ],
+            blocking=True,
+        ))
     decisions.sort(key=lambda item: int(item.id.removeprefix("HR-")))
 
 
@@ -631,7 +772,10 @@ def reconcile(inputs: ReconciliationInputs,
                         IssueOutcome.DEFERRED if option.effect is DecisionEffect.DEFER
                         else IssueOutcome.SKIPPED_WITH_HUMAN_APPROVAL
                     )
-            if option.effect is DecisionEffect.APPLY_RECONCILED_CHANGE:
+            if option.effect in {
+                DecisionEffect.APPLY_RECONCILED_CHANGE,
+                DecisionEffect.ACCEPT_STAGED_RISK,
+            }:
                 if reconciled.original_action is Action.REVIEW_REQUIRED:
                     target = resolve_vault_target(inputs.vault, reconciled.original_target_path)
                     reconciled.final_action = (
@@ -642,6 +786,12 @@ def reconcile(inputs: ReconciliationInputs,
                 if reconciled.final_action in (Action.CREATE, Action.UPDATE):
                     assert reconciled.final_content is not None
                     reconciled.final_content_sha256 = _sha256_text(reconciled.final_content)
+                if option.effect is DecisionEffect.ACCEPT_STAGED_RISK:
+                    for reconciled_issue in reconciled.issues:
+                        if reconciled_issue.id in decision.issue_ids:
+                            reconciled_issue.resolution = (
+                                IssueResolutionDisposition.ISSUE_EXPLICITLY_ACCEPTED
+                            )
             elif option.effect is DecisionEffect.KEEP_SEPARATE:
                 plan = identity_plans.get(decision_id)
                 if plan is None:
@@ -704,6 +854,23 @@ def reconcile(inputs: ReconciliationInputs,
                 description="Explicitly accepted removal of listed existing content.",
                 evidence=[item.excerpt for item in covered_losses],
             ))
+        elif option.effect is DecisionEffect.ACCEPT_STAGED_RISK:
+            evidence = [
+                issue.explanation
+                for change_id in _direct_change_ids(decision)
+                for issue in change_by_id[change_id].issues
+                if issue.id in decision.issue_ids
+            ]
+            accepted_risks.append(AcceptedRisk(
+                id=f"RISK-{len(accepted_risks) + 1:03d}",
+                category=DecisionCategory.SEMANTIC_RISK,
+                change_ids=_direct_change_ids(decision),
+                issue_ids=list(decision.issue_ids),
+                decision_id=decision_id,
+                selected_option=selected,
+                description="Explicitly accepted the listed semantic risk without rewriting.",
+                evidence=evidence,
+            ))
 
     direct_decisions_by_change: dict[str, list[HumanDecision]] = {}
     for decision in decisions:
@@ -756,18 +923,49 @@ def reconcile(inputs: ReconciliationInputs,
         ):
             reconciled.status = ReconciledChangeStatus.BLOCKED
 
-    final_identities = build_effective_identity_registry(inputs, reconciled_changes)
-    final_dependencies = analyze_dependencies(inputs, reconciled_changes, final_identities)
-    for reconciled in reconciled_changes:
-        reconciled.dependencies = [
-            item for item in final_dependencies
-            if item.source_change_id == reconciled.id
-        ]
-        if (reconciled.status not in (
+    while True:
+        final_identities = build_effective_identity_registry(inputs, reconciled_changes)
+        final_dependencies = analyze_dependencies(
+            inputs, reconciled_changes, final_identities
+        )
+        newly_blocked: list[ReconciledChange] = []
+        for reconciled in reconciled_changes:
+            reconciled.dependencies = [
+                item for item in final_dependencies
+                if item.source_change_id == reconciled.id
+            ]
+            if (reconciled.status not in (
+                    ReconciledChangeStatus.BLOCKED,
+                    ReconciledChangeStatus.DEFERRED,
+                    ReconciledChangeStatus.SKIPPED,
+                    ReconciledChangeStatus.INVALID,
+                ) and any(item.blocking for item in reconciled.dependencies)):
+                newly_blocked.append(reconciled)
+        atomic_newly_blocked: list[ReconciledChange] = []
+        for decision_id, option in selection_options.items():
+            if option.effect is not DecisionEffect.KEEP_SEPARATE:
+                continue
+            participants = [
+                change_by_id[change_id]
+                for change_id in _direct_change_ids(decision_by_id[decision_id])
+            ]
+            excluded = {
+                ReconciledChangeStatus.BLOCKED,
                 ReconciledChangeStatus.DEFERRED,
                 ReconciledChangeStatus.SKIPPED,
                 ReconciledChangeStatus.INVALID,
-            ) and any(item.blocking for item in reconciled.dependencies)):
+            }
+            if any(item.status in excluded for item in participants):
+                atomic_newly_blocked.extend(
+                    item for item in participants
+                    if item.status in {
+                        ReconciledChangeStatus.READY,
+                        ReconciledChangeStatus.FIXED,
+                    }
+                )
+        if not newly_blocked and not atomic_newly_blocked:
+            break
+        for reconciled in [*newly_blocked, *atomic_newly_blocked]:
             reconciled.status = ReconciledChangeStatus.BLOCKED
 
     final_findings = validate_final_changes(inputs, reconciled_changes)
