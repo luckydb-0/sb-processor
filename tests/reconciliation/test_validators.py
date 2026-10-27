@@ -137,7 +137,10 @@ def test_link_must_resolve_against_vault_or_final_create_targets(tmp_path: Path)
 
     findings = validate_final_changes(inputs, changes)
 
-    assert "LINK" in error_codes(findings)
+    assert changes[0].status.value == "BLOCKED"
+    assert changes[0].dependencies[0].target_state.value == "TARGET_MISSING"
+    assert changes[0].dependencies[0].blocking is True
+    assert "LINK" not in error_codes(findings)
 
 
 def test_action_must_match_target_existence(tmp_path: Path):

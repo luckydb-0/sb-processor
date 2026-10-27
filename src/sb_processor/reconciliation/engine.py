@@ -5,10 +5,17 @@ import re
 from pathlib import Path
 
 from ..models import Action, NoteChange, ReviewStatus
+from .dependencies import analyze_dependencies
 from .fixes import classify_and_apply_fix
+from .identities import (
+    build_effective_identity_registry,
+    plan_keep_separate,
+    IdentityResolutionPlan,
+)
 from .inputs import ReconciliationInputs, resolve_vault_target
 from .models import (
     DecisionEffect,
+    DecisionCategory,
     DecisionOption,
     DecisionStatus,
     FinalChangeSet,
@@ -16,6 +23,7 @@ from .models import (
     HumanDecision,
     IssueOutcome,
     IssueClassification,
+    IssueResolutionDisposition,
     ReconciledChange,
     ReconciledChangeStatus,
     ReconciledIssue,
@@ -24,10 +32,10 @@ from .models import (
     PatchOperation,
     ValidationSeverity,
 )
-from .validators import find_blocked_link_dependencies, validate_final_changes
+from .validators import validate_final_changes
 
 
-RECONCILIATION_VERSION = "reconciliation-v1"
+RECONCILIATION_VERSION = "reconciliation-v1.1"
 
 
 def _sha256_text(value: str) -> str:
@@ -126,10 +134,226 @@ def _remove_unresolved_link(reconciled: ReconciledChange, issue: ReconciledIssue
     issue.outcome = IssueOutcome.APPLIED
 
 
-def _initial_final_action(change: NoteChange) -> Action | None:
+def _initial_final_action(change: NoteChange, inputs: ReconciliationInputs) -> Action | None:
     if change.action in (Action.CREATE, Action.UPDATE, Action.NO_CHANGE):
         return change.action
+    if change.action is Action.REVIEW_REQUIRED:
+        target = resolve_vault_target(inputs.vault, change.target_path)
+        return Action.UPDATE if target is not None and target.is_file() else Action.CREATE
     return None
+
+
+def _direct_change_ids(decision: HumanDecision) -> list[str]:
+    direct = {
+        issue_id.split("-I", 1)[0]
+        for issue_id in decision.issue_ids
+        if "-I" in issue_id
+    }
+    return sorted(direct or set(decision.change_ids))
+
+
+def _next_decision_id(decisions: list[HumanDecision]) -> str:
+    number = max((int(item.id.removeprefix("HR-")) for item in decisions), default=0) + 1
+    return f"HR-{number:03d}"
+
+
+def _drop_decisions(decisions: list[HumanDecision], decision_ids: set[str]) -> None:
+    decisions[:] = [item for item in decisions if item.id not in decision_ids]
+
+
+def _replace_issue_decisions(changes: list[ReconciledChange], old_ids: set[str],
+                             root_id: str) -> list[str]:
+    issue_ids: list[str] = []
+    for change in changes:
+        replaced = False
+        for issue in change.issues:
+            if issue.human_decision_id not in old_ids:
+                continue
+            issue.human_decision_id = root_id
+            issue_ids.append(issue.id)
+            replaced = True
+        if replaced:
+            change.human_decision_ids = [
+                item for item in change.human_decision_ids if item not in old_ids
+            ]
+            if root_id not in change.human_decision_ids:
+                change.human_decision_ids.append(root_id)
+    return issue_ids
+
+
+def _group_identity_decisions(
+        inputs: ReconciliationInputs,
+        changes: list[ReconciledChange],
+        decisions: list[HumanDecision],
+        dependencies,
+        identity_analysis,
+) -> dict[str, IdentityResolutionPlan]:
+    plans: dict[str, IdentityResolutionPlan] = {}
+    change_by_path = {
+        (item.final_target_path or item.original_target_path): item
+        for item in changes
+    }
+    for collision in identity_analysis.collisions:
+        if not collision.blocking:
+            continue
+        participant_ids = set(collision.change_ids)
+        for claim in collision.claims:
+            if claim.canonical_path in change_by_path:
+                participant_ids.add(change_by_path[claim.canonical_path].id)
+        dependent_ids = {
+            item.source_change_id
+            for item in dependencies
+            if item.normalized_target == collision.normalized_identity
+        }
+        relevant_ids = participant_ids | dependent_ids
+        old_ids = {
+            issue.human_decision_id
+            for change in changes
+            if change.id in participant_ids
+            for issue in change.issues
+            if (issue.issue_type.value in ("existing_note", "concept_boundary", "alias")
+                and issue.human_decision_id is not None)
+        }
+        root_id = sorted(old_ids)[0] if old_ids else _next_decision_id(decisions)
+        issue_ids = _replace_issue_decisions(changes, old_ids, root_id)
+        if not issue_ids:
+            direct_change = next(item for item in changes if item.id in participant_ids)
+            synthetic = ReconciledIssue(
+                id=f"{direct_change.id}-I{len(direct_change.issues) + 1:02d}",
+                agent_b_issue_index=-1,
+                issue_type="concept_boundary",
+                explanation=(
+                    f"Identity `{collision.normalized_identity}` maps to more than one note."
+                ),
+                proposed_correction="Resolve the mechanical identity collision",
+                classification=IssueClassification.AMBIGUOUS,
+                outcome=IssueOutcome.HUMAN_REQUIRED,
+                human_decision_id=root_id,
+            )
+            direct_change.issues.append(synthetic)
+            direct_change.human_decision_ids.append(root_id)
+            issue_ids.append(synthetic.id)
+        _drop_decisions(decisions, old_ids)
+        plan = plan_keep_separate(inputs, collision, changes)
+        options: list[DecisionOption] = []
+        if plan is not None:
+            plans[root_id] = plan
+            options.append(DecisionOption(
+                key="KEEP_SEPARATE",
+                label="Keep both identities separate",
+                effect=DecisionEffect.KEEP_SEPARATE,
+                consequence=(
+                    "Create the proposed canonical note and remove only the exact colliding "
+                    f"alias from `{plan.existing_path}`, then revalidate identities and links."
+                ),
+            ))
+        options.append(DecisionOption(
+            key="DEFER",
+            label="Defer the identity change",
+            effect=DecisionEffect.DEFER,
+            consequence=(
+                "Exclude the proposed identity changes and recompute dependents against the "
+                "unchanged vault."
+            ),
+        ))
+        decision = HumanDecision(
+            id=root_id,
+            change_ids=sorted(relevant_ids),
+            issue_ids=sorted(set(issue_ids)),
+            category=DecisionCategory.CONCEPT_IDENTITY.value,
+            status=DecisionStatus.PENDING,
+            question=(
+                f"Should `{collision.normalized_identity}` remain a separate canonical identity?"
+            ),
+            context=(
+                "The effective vault registry maps this title/alias identity to multiple notes: "
+                + ", ".join(sorted({item.canonical_path for item in collision.claims}))
+            ),
+            agent_a_position="Create or retain the proposed separate identity.",
+            agent_b_position="Resolve the title/alias boundary before writing.",
+            recommendation="DEFER",
+            rationale="Semantic equivalence is not proven by an alias collision.",
+            confidence="low",
+            options=options,
+            blocking=True,
+        )
+        decisions.append(decision)
+        collision.human_decision_id = root_id
+        collision.change_ids = sorted(participant_ids)
+        collision.dependent_change_ids = sorted(dependent_ids - participant_ids)
+        for change in changes:
+            if change.id in relevant_ids:
+                if root_id not in change.human_decision_ids:
+                    change.human_decision_ids.append(root_id)
+                change.human_decision_required = True
+                change.status = ReconciledChangeStatus.BLOCKED
+        for dependency in dependencies:
+            if dependency.normalized_target == collision.normalized_identity:
+                dependency.root_decision_id = root_id
+    decisions.sort(key=lambda item: int(item.id.removeprefix("HR-")))
+    return plans
+
+
+def _reconcile_dependency_decisions(
+        changes: list[ReconciledChange],
+        decisions: list[HumanDecision],
+        dependencies,
+) -> None:
+    decision_by_id = {item.id: item for item in decisions}
+    change_by_id = {item.id: item for item in changes}
+    for dependency in dependencies:
+        source = change_by_id[dependency.source_change_id]
+        matching_issues = [
+            issue for issue in source.issues
+            if dependency.token in _unresolved_link_tokens(issue.explanation)
+        ]
+        old_ids = {
+            issue.human_decision_id for issue in matching_issues
+            if issue.human_decision_id is not None
+        }
+        if not dependency.blocking:
+            _drop_decisions(decisions, old_ids)
+            source.human_decision_ids = [
+                item for item in source.human_decision_ids if item not in old_ids
+            ]
+            for issue in matching_issues:
+                issue.human_decision_id = None
+                issue.outcome = IssueOutcome.APPLIED
+                issue.resolution = IssueResolutionDisposition.ISSUE_FIXED
+            continue
+        if dependency.root_decision_id is None:
+            continue
+        root = decision_by_id.get(dependency.root_decision_id)
+        if root is None:
+            continue
+        _drop_decisions(decisions, old_ids - {root.id})
+        source.human_decision_ids = [
+            item for item in source.human_decision_ids
+            if item not in old_ids or item == root.id
+        ]
+        if root.id not in source.human_decision_ids:
+            source.human_decision_ids.append(root.id)
+        if source.id not in root.change_ids:
+            root.change_ids.append(source.id)
+            root.change_ids.sort()
+        if not matching_issues:
+            synthetic = ReconciledIssue(
+                id=f"{source.id}-I{len(source.issues) + 1:02d}",
+                agent_b_issue_index=-1,
+                issue_type="link",
+                explanation=f"Unresolved wikilink: {dependency.token}",
+                proposed_correction="Resolve the target's root decision",
+                classification=IssueClassification.AMBIGUOUS,
+                outcome=IssueOutcome.HUMAN_REQUIRED,
+                human_decision_id=root.id,
+            )
+            source.issues.append(synthetic)
+            matching_issues = [synthetic]
+        for issue in matching_issues:
+            issue.human_decision_id = root.id
+        source.human_decision_required = True
+        source.status = ReconciledChangeStatus.BLOCKED
+    decisions.sort(key=lambda item: int(item.id.removeprefix("HR-")))
 
 
 def reconcile(inputs: ReconciliationInputs,
@@ -208,7 +432,7 @@ def reconcile(inputs: ReconciliationInputs,
             decision_ids.append(decision_id)
             decisions.append(_decision(decision_id, change_id, synthetic, change))
 
-        final_action = _initial_final_action(change)
+        final_action = _initial_final_action(change, inputs)
         final_content = content if change.action is not Action.NO_CHANGE else None
         if decision_ids:
             status = ReconciledChangeStatus.BLOCKED
@@ -270,51 +494,20 @@ def reconcile(inputs: ReconciliationInputs,
         source = inputs.reviewed_proposal.note_changes[reconciled.agent_a_change_index]
         decisions.append(_decision(decision_id, change_id, synthetic, source))
 
-    while True:
-        added_dependency = False
-        dependency_findings = [
-            *validate_final_changes(inputs, reconciled_changes),
-            *find_blocked_link_dependencies(inputs, reconciled_changes),
-        ]
-        for finding in dependency_findings:
-            if finding.code != "LINK_TO_BLOCKED_CHANGE":
-                continue
-            finding_tokens = _unresolved_link_tokens(finding.message)
-            if len(finding_tokens) != 1:
-                continue
-            finding_token = finding_tokens[0]
-            for change_id in finding.change_ids:
-                reconciled = change_by_id[change_id]
-                covered_tokens = {
-                    token
-                    for issue in reconciled.issues
-                    if issue.human_decision_id
-                    for token in _unresolved_link_tokens(issue.explanation)
-                }
-                if finding_token in covered_tokens:
-                    continue
-                decision_number += 1
-                decision_id = f"HR-{decision_number:03d}"
-                issue_id = f"{change_id}-I{len(reconciled.issues) + 1:02d}"
-                synthetic = ReconciledIssue(
-                    id=issue_id,
-                    agent_b_issue_index=-1,
-                    issue_type="link",
-                    explanation=finding.message,
-                    proposed_correction="Resolve the target decision or remove this exact link",
-                    classification=IssueClassification.AMBIGUOUS,
-                    outcome=IssueOutcome.HUMAN_REQUIRED,
-                    human_decision_id=decision_id,
-                )
-                reconciled.issues.append(synthetic)
-                reconciled.human_decision_ids.append(decision_id)
-                reconciled.human_decision_required = True
-                reconciled.status = ReconciledChangeStatus.BLOCKED
-                source = inputs.reviewed_proposal.note_changes[reconciled.agent_a_change_index]
-                decisions.append(_decision(decision_id, change_id, synthetic, source))
-                added_dependency = True
-        if not added_dependency:
-            break
+    initial_identities = build_effective_identity_registry(inputs, reconciled_changes)
+    initial_dependencies = analyze_dependencies(
+        inputs, reconciled_changes, initial_identities
+    )
+    identity_plans = _group_identity_decisions(
+        inputs,
+        reconciled_changes,
+        decisions,
+        initial_dependencies,
+        initial_identities,
+    )
+    _reconcile_dependency_decisions(
+        reconciled_changes, decisions, initial_dependencies
+    )
 
     decision_by_id = {item.id: item for item in decisions}
     unknown = sorted(set(selections) - set(decision_by_id))
@@ -329,7 +522,7 @@ def reconcile(inputs: ReconciliationInputs,
             raise ValueError(f"Invalid option for {decision_id}: {selected}")
         selection_options[decision_id] = option
         if option.effect is not DecisionEffect.REMOVE_LINK:
-            for change_id in decision.change_ids:
+            for change_id in _direct_change_ids(decision):
                 selected_effects_by_change.setdefault(change_id, set()).add(option.effect)
     conflicting = sorted(change_id for change_id, effects in selected_effects_by_change.items()
                          if len(effects) > 1)
@@ -346,7 +539,7 @@ def reconcile(inputs: ReconciliationInputs,
         decision.selected_option = selected
         decision.status = (DecisionStatus.DEFERRED if option.effect is DecisionEffect.DEFER
                            else DecisionStatus.RESOLVED)
-        for change_id in decision.change_ids:
+        for change_id in _direct_change_ids(decision):
             reconciled = change_by_id[change_id]
             for reconciled_issue in reconciled.issues:
                 if reconciled_issue.id not in decision.issue_ids:
@@ -369,6 +562,29 @@ def reconcile(inputs: ReconciliationInputs,
                 if reconciled.final_action in (Action.CREATE, Action.UPDATE):
                     assert reconciled.final_content is not None
                     reconciled.final_content_sha256 = _sha256_text(reconciled.final_content)
+            elif option.effect is DecisionEffect.KEEP_SEPARATE:
+                plan = identity_plans.get(decision_id)
+                if plan is None:
+                    raise ValueError(
+                        f"Decision {decision_id} has no safe KEEP_SEPARATE transformation"
+                    )
+                create = change_by_id[plan.create_change_id]
+                existing = change_by_id[plan.existing_change_id]
+                create.final_action = Action.CREATE
+                assert create.final_content is not None
+                create.final_content_sha256 = _sha256_text(create.final_content)
+                existing.final_action = Action.UPDATE
+                existing.final_content = plan.final_content
+                existing.final_content_sha256 = _sha256_text(plan.final_content)
+                if plan.patch not in existing.applied_fixes:
+                    existing.applied_fixes.append(plan.patch)
+                for affected in (create, existing):
+                    for affected_issue in affected.issues:
+                        if affected_issue.id in decision.issue_ids:
+                            affected_issue.outcome = IssueOutcome.APPLIED
+                            affected_issue.resolution = (
+                                IssueResolutionDisposition.ISSUE_FIXED
+                            )
             elif option.effect is DecisionEffect.REMOVE_LINK:
                 pass
             elif option.effect is DecisionEffect.SKIP_CHANGE:
@@ -380,13 +596,19 @@ def reconcile(inputs: ReconciliationInputs,
                 reconciled.final_content = None
                 reconciled.final_content_sha256 = None
 
+    direct_decisions_by_change: dict[str, list[HumanDecision]] = {}
+    for decision in decisions:
+        for change_id in _direct_change_ids(decision):
+            direct_decisions_by_change.setdefault(change_id, []).append(decision)
+
     for reconciled in reconciled_changes:
         related = [item for item in decisions if reconciled.id in item.change_ids]
+        direct_related = direct_decisions_by_change.get(reconciled.id, [])
         pending = any(item.status is DecisionStatus.PENDING for item in related)
         reconciled.human_decision_required = pending
         if pending:
             reconciled.status = ReconciledChangeStatus.BLOCKED
-        elif any(item.status is DecisionStatus.DEFERRED for item in related):
+        elif any(item.status is DecisionStatus.DEFERRED for item in direct_related):
             reconciled.status = ReconciledChangeStatus.DEFERRED
         elif reconciled.final_action is Action.NO_CHANGE:
             reconciled.status = ReconciledChangeStatus.READY
@@ -394,6 +616,20 @@ def reconcile(inputs: ReconciliationInputs,
             reconciled.status = ReconciledChangeStatus.FIXED
         else:
             reconciled.status = ReconciledChangeStatus.READY
+
+    final_identities = build_effective_identity_registry(inputs, reconciled_changes)
+    final_dependencies = analyze_dependencies(inputs, reconciled_changes, final_identities)
+    for reconciled in reconciled_changes:
+        reconciled.dependencies = [
+            item for item in final_dependencies
+            if item.source_change_id == reconciled.id
+        ]
+        if (reconciled.status not in (
+                ReconciledChangeStatus.DEFERRED,
+                ReconciledChangeStatus.SKIPPED,
+                ReconciledChangeStatus.INVALID,
+            ) and any(item.blocking for item in reconciled.dependencies)):
+            reconciled.status = ReconciledChangeStatus.BLOCKED
 
     final_findings = validate_final_changes(inputs, reconciled_changes)
     for reconciled in reconciled_changes:
@@ -412,6 +648,15 @@ def reconcile(inputs: ReconciliationInputs,
         human_decisions=decisions,
         unresolved_decision_ids=unresolved,
         validation_findings=final_findings,
+        dependencies=final_dependencies,
+        identity_collisions=list(final_identities.collisions),
+        applicable_change_ids=[
+            item.id for item in reconciled_changes
+            if item.status in (
+                ReconciledChangeStatus.READY,
+                ReconciledChangeStatus.FIXED,
+            ) and item.final_action in (Action.CREATE, Action.UPDATE)
+        ],
         state=(FinalChangeSetState.INVALID if has_errors
                else FinalChangeSetState.PENDING_HUMAN_REVIEW if unresolved
                else FinalChangeSetState.READY_FOR_WRITE),

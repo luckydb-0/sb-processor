@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from sb_processor.reconciliation.engine import reconcile
 from sb_processor.reconciliation.inputs import load_reconciliation_inputs
 from sb_processor.reconciliation.models import (
+    DecisionCategory,
     DecisionStatus,
     FinalChangeSetState,
     IssueClassification,
@@ -325,7 +328,7 @@ def test_review_required_resolution_infers_update_only_when_target_exists(tmp_pa
     pending = reconcile(inputs)
     resolved = reconcile(inputs, {"HR-001": "APPLY_RECONCILED_CHANGE"})
 
-    assert pending.final_change_set.changes[0].final_action is None
+    assert pending.final_change_set.changes[0].final_action.value == "UPDATE"
     assert resolved.final_change_set.changes[0].final_action.value == "UPDATE"
     assert resolved.final_change_set.changes[0].final_content == content
 
@@ -452,14 +455,16 @@ def test_link_to_blocked_change_is_exposed_as_dependent_human_decision(tmp_path:
     )
 
     pending = reconcile(inputs)
-    resolved = reconcile(inputs, {"HR-001": "DEFER", "HR-002": "DEFER"})
+    resolved = reconcile(inputs, {"HR-001": "DEFER"})
 
-    assert [item.id for item in pending.final_change_set.human_decisions] == ["HR-001", "HR-002"]
-    assert pending.final_change_set.human_decisions[1].change_ids == ["RC-002"]
-    assert "[[Blocked Target]]" in pending.final_change_set.human_decisions[1].question
+    assert [item.id for item in pending.final_change_set.human_decisions] == ["HR-001"]
+    dependency = next(item for item in pending.final_change_set.dependencies
+                      if item.source_change_id == "RC-002")
+    assert dependency.root_decision_id == "HR-001"
+    assert dependency.blocking is True
     assert pending.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
     assert resolved.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
-    assert resolved.final_change_set.changes[1].status is ReconciledChangeStatus.DEFERRED
+    assert resolved.final_change_set.changes[1].status is ReconciledChangeStatus.BLOCKED
 
 
 def test_blocked_link_gets_its_own_decision_when_change_already_has_another_link_issue(
@@ -498,9 +503,10 @@ def test_blocked_link_gets_its_own_decision_when_change_already_has_another_link
         item for item in pending.final_change_set.human_decisions
         if item.change_ids == ["RC-002"]
     ]
-    assert [item.id for item in dependent_decisions] == ["HR-002", "HR-003"]
+    assert [item.id for item in dependent_decisions] == ["HR-002"]
     assert "[[Unknown Target]]" in dependent_decisions[0].question
-    assert "[[Blocked Target]]" in dependent_decisions[1].question
+    assert any(item.root_decision_id == "HR-001" and item.token == "[[Blocked Target]]"
+               for item in pending.final_change_set.dependencies)
 
 
 def test_dependency_decisions_do_not_cascade_through_still_pending_creates(tmp_path: Path):
@@ -530,6 +536,166 @@ def test_dependency_decisions_do_not_cascade_through_still_pending_creates(tmp_p
     pending = reconcile(inputs)
 
     assert [item.change_ids for item in pending.final_change_set.human_decisions] == [
-        ["RC-001"], ["RC-002"]
+        ["RC-001", "RC-002"]
     ]
     assert pending.final_change_set.changes[2].human_decision_ids == []
+
+
+def classification_identity_inputs(
+        tmp_path: Path, *, existing: str | None = None,
+        original_hash: str | None = None, include_semantic_issue: bool = False):
+    existing = existing or (
+        "---\ntype: concept\naliases: [Classification, Predictive Classifier]\n"
+        "maps: []\n---\n# Predictive Classification\n"
+        "Classification assigns discrete labels to records.\n"
+    )
+    original_hash = original_hash or hashlib.sha256(existing.encode()).hexdigest()
+    classification = change(
+        path="Dots/Classification.md",
+        action="REVIEW_REQUIRED",
+        content="---\ntype: concept\naliases: []\n---\n# Classification\nNew concept.\n",
+    )
+    predictive = change(
+        path="Dots/Predictive Classification.md",
+        action="REVIEW_REQUIRED",
+        content="",
+        original_content_hash=original_hash,
+    )
+    dependent = change(
+        path="Dots/Dependent.md",
+        content="---\ntype: concept\n---\n# Dependent\nSee [[Classification]].\n",
+    )
+    issues = [
+        review_issue(
+            "Dots/Classification.md",
+            "existing_note",
+            "Resolve the original proposal concern before applying",
+            explanation="Classification may overlap Predictive Classification.",
+        ),
+        review_issue(
+            "Dots/Predictive Classification.md",
+            "existing_note",
+            "Resolve the original proposal concern before applying",
+            explanation="Predictive Classification currently owns the Classification alias.",
+        ),
+    ]
+    classification_indices = [0]
+    if include_semantic_issue:
+        classification_indices.append(len(issues))
+        issues.append(review_issue(
+            "Dots/Classification.md",
+            "claim_strength",
+            "Confirm the unsupported claim",
+            explanation="The staged definition is broader than the supplied evidence.",
+        ))
+    return loaded_inputs(
+        tmp_path,
+        [classification, predictive, dependent],
+        [
+            reviewed_change(
+                "Dots/Classification.md", status="REVIEW_REQUIRED",
+                issue_indices=classification_indices,
+            ),
+            reviewed_change(
+                "Dots/Predictive Classification.md", status="REVIEW_REQUIRED",
+                issue_indices=[1],
+            ),
+            reviewed_change("Dots/Dependent.md"),
+        ],
+        issues,
+        vault_contents={"Dots/Predictive Classification.md": existing},
+    )
+
+
+def test_classification_identity_uses_one_shared_decision_for_notes_and_dependents(tmp_path: Path):
+    result = reconcile(classification_identity_inputs(tmp_path))
+
+    identity_decisions = [
+        item for item in result.final_change_set.human_decisions
+        if item.category == DecisionCategory.CONCEPT_IDENTITY.value
+    ]
+    assert len(identity_decisions) == 1
+    decision = identity_decisions[0]
+    assert decision.change_ids == ["RC-001", "RC-002", "RC-003"]
+    assert set(decision.issue_ids) == {"RC-001-I01", "RC-002-I01"}
+    assert [option.key for option in decision.options] == ["KEEP_SEPARATE", "DEFER"]
+    assert "MERGE" not in {option.key for option in decision.options}
+    assert "APPLY_RECONCILED_CHANGE" not in {option.key for option in decision.options}
+    assert all(decision.id in item.human_decision_ids
+               for item in result.final_change_set.changes[:2])
+
+
+def test_keep_separate_creates_classification_and_minimally_removes_existing_alias(tmp_path: Path):
+    inputs = classification_identity_inputs(tmp_path)
+    pending = reconcile(inputs)
+    identity = next(item for item in pending.final_change_set.human_decisions
+                    if item.category == DecisionCategory.CONCEPT_IDENTITY.value)
+
+    result = reconcile(inputs, {identity.id: "KEEP_SEPARATE"})
+
+    classification, predictive, dependent = result.final_change_set.changes
+    assert classification.final_action.value == "CREATE"
+    assert predictive.final_action.value == "UPDATE"
+    assert predictive.final_content == (
+        "---\ntype: concept\naliases: [Predictive Classifier]\n"
+        "maps: []\n---\n# Predictive Classification\n"
+        "Classification assigns discrete labels to records.\n"
+    )
+    assert predictive.applied_fixes[-1].before == (
+        "aliases: [Classification, Predictive Classifier]"
+    )
+    assert predictive.applied_fixes[-1].after == "aliases: [Predictive Classifier]"
+    assert not [item for item in result.final_change_set.identity_collisions if item.blocking]
+    assert dependent.status in {ReconciledChangeStatus.READY, ReconciledChangeStatus.FIXED}
+    assert result.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
+
+
+@pytest.mark.parametrize(
+    ("existing", "original_hash"),
+    [
+        (
+            "---\ntype: concept\naliases: [Classification]\n---\n"
+            "# Predictive Classification\nExisting.\n",
+            "f" * 64,
+        ),
+        (
+            "---\ntype: concept\naliases: &shared [Classification]\n---\n"
+            "# Predictive Classification\nExisting.\n",
+            None,
+        ),
+        (
+            "---\ntype: concept\naliases: [Classification, Classification]\n---\n"
+            "# Predictive Classification\nExisting.\n",
+            None,
+        ),
+    ],
+)
+def test_keep_separate_is_not_offered_without_one_safe_exact_alias_patch(
+        tmp_path: Path, existing: str, original_hash: str | None):
+    inputs = classification_identity_inputs(
+        tmp_path, existing=existing, original_hash=original_hash
+    )
+
+    result = reconcile(inputs)
+
+    identity = next(item for item in result.final_change_set.human_decisions
+                    if item.category == DecisionCategory.CONCEPT_IDENTITY.value)
+    assert [option.key for option in identity.options] == ["DEFER"]
+
+
+def test_conflicting_shared_and_semantic_decisions_are_rejected_independent_of_order(
+        tmp_path: Path):
+    inputs = classification_identity_inputs(tmp_path, include_semantic_issue=True)
+    pending = reconcile(inputs)
+    identity = next(item for item in pending.final_change_set.human_decisions
+                    if item.category == DecisionCategory.CONCEPT_IDENTITY.value)
+    semantic = next(item for item in pending.final_change_set.human_decisions
+                    if item.category != DecisionCategory.CONCEPT_IDENTITY.value
+                    and "RC-001" in item.change_ids)
+
+    for selections in (
+        {identity.id: "KEEP_SEPARATE", semantic.id: "DEFER"},
+        {semantic.id: "DEFER", identity.id: "KEEP_SEPARATE"},
+    ):
+        with pytest.raises(ValueError, match="Conflicting decision effects"):
+            reconcile(inputs, selections)

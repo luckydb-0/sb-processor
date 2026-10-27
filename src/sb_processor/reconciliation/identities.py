@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from pathlib import PurePosixPath
 
 import yaml
@@ -13,6 +14,8 @@ from .models import (
     IdentityClaim,
     IdentityClaimKind,
     IdentityCollision,
+    PatchKind,
+    PatchOperation,
     ReconciledChange,
     ReconciledChangeStatus,
 )
@@ -42,6 +45,17 @@ class IdentityAnalysis:
     claims: tuple[IdentityClaim, ...]
     collisions: tuple[IdentityCollision, ...]
     by_normalized: dict[str, tuple[IdentityClaim, ...]]
+
+
+@dataclass(frozen=True)
+class IdentityResolutionPlan:
+    collision_id: str
+    create_change_id: str
+    existing_change_id: str
+    existing_path: str
+    existing_content: str
+    final_content: str
+    patch: PatchOperation
 
 
 def _strings(value: object) -> tuple[str, ...]:
@@ -92,14 +106,25 @@ def _effective_notes(inputs: ReconciliationInputs,
                 or change.final_action not in (Action.CREATE, Action.UPDATE)
                 or change.final_content is None):
             continue
+        if (change.status is ReconciledChangeStatus.BLOCKED
+                and change.final_action is Action.UPDATE):
+            continue
         path = change.final_target_path or change.original_target_path
         title, aliases = _content_identity(path, change.final_content)
+        existing = notes.get(path)
+        identity_changed = (
+            change.final_action is Action.CREATE
+            or existing is None
+            or normalize(existing.title) != normalize(title)
+            or {normalize(item) for item in existing.aliases}
+            != {normalize(item) for item in aliases}
+        )
         notes[path] = EffectiveNote(
             path=path,
             title=title,
             aliases=aliases,
-            change_id=change.id,
-            from_existing_vault=False,
+            change_id=change.id if identity_changed else None,
+            from_existing_vault=not identity_changed,
         )
     return [notes[path] for path in sorted(notes)]
 
@@ -162,4 +187,90 @@ def build_effective_identity_registry(
         claims=tuple(claims),
         collisions=tuple(collisions),
         by_normalized={key: tuple(value) for key, value in grouped.items()},
+    )
+
+
+_INLINE_ALIASES = re.compile(
+    r"(?m)^(?P<prefix>[ \t]*aliases:[ \t]*\[)(?P<body>[^\]\n]*)(?P<suffix>\][ \t]*)$"
+)
+
+
+def _exact_alias_patch(content: str, alias: str) -> PatchOperation | None:
+    matches = list(_INLINE_ALIASES.finditer(content))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    raw_items = [item.strip() for item in match.group("body").split(",") if item.strip()]
+    decoded: list[str] = []
+    for raw in raw_items:
+        try:
+            value = yaml.safe_load(raw)
+        except yaml.YAMLError:
+            return None
+        if not isinstance(value, str):
+            return None
+        decoded.append(value)
+    matching = [index for index, value in enumerate(decoded) if value == alias]
+    if len(matching) != 1:
+        return None
+    remaining = [raw for index, raw in enumerate(raw_items) if index != matching[0]]
+    replacement = f"{match.group('prefix')}{', '.join(remaining)}{match.group('suffix')}"
+    return PatchOperation(
+        kind=PatchKind.REPLACE,
+        start=match.start(),
+        end=match.end(),
+        before=match.group(0),
+        after=replacement,
+    )
+
+
+def plan_keep_separate(
+        inputs: ReconciliationInputs,
+        collision: IdentityCollision,
+        changes: list[ReconciledChange]) -> IdentityResolutionPlan | None:
+    """Return the one safe alias-removal recipe supported by v1.1, if available."""
+    change_by_id = {item.id: item for item in changes}
+    change_by_path = {
+        (item.final_target_path or item.original_target_path): item
+        for item in changes
+    }
+    create_ids = {
+        claim.change_id
+        for claim in collision.claims
+        if claim.change_id is not None
+        and change_by_id[claim.change_id].final_action is Action.CREATE
+    }
+    existing_alias_claims = [
+        claim for claim in collision.claims
+        if claim.kind is IdentityClaimKind.ALIAS and claim.from_existing_vault
+    ]
+    if len(create_ids) != 1 or len(existing_alias_claims) != 1:
+        return None
+    existing_claim = existing_alias_claims[0]
+    existing_change = change_by_path.get(existing_claim.canonical_path)
+    if existing_change is None:
+        return None
+    scanned = next(
+        (note for note in inputs.vault_notes if note.path == existing_claim.canonical_path),
+        None,
+    )
+    if (scanned is None
+            or existing_change.expected_existing_content_sha256 != scanned.content_hash):
+        return None
+    target = Path(inputs.vault) / existing_claim.canonical_path
+    existing_content = target.read_text(encoding="utf-8")
+    patch = _exact_alias_patch(existing_content, existing_claim.value)
+    if patch is None:
+        return None
+    final_content = (
+        existing_content[:patch.start] + patch.after + existing_content[patch.end:]
+    )
+    return IdentityResolutionPlan(
+        collision_id=collision.id,
+        create_change_id=next(iter(create_ids)),
+        existing_change_id=existing_change.id,
+        existing_path=existing_claim.canonical_path,
+        existing_content=existing_content,
+        final_content=final_content,
+        patch=patch,
     )

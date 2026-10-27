@@ -72,7 +72,11 @@ def _state_for_target(inputs: ReconciliationInputs,
     existing = any(note.path == path for note in inputs.vault_notes)
     if change is None:
         return DependencyTargetState.TARGET_EXISTS_IN_VAULT, None, None
-    root_decision_id = change.human_decision_ids[0] if change.human_decision_ids else None
+    root_decision_id = (
+        change.human_decision_ids[0]
+        if len(change.human_decision_ids) == 1
+        else None
+    )
     if change.status in (ReconciledChangeStatus.BLOCKED, ReconciledChangeStatus.DEFERRED):
         if existing and change.original_action is not Action.CREATE:
             return DependencyTargetState.TARGET_EXISTS_IN_VAULT, change.id, root_decision_id

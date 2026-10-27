@@ -14,6 +14,7 @@ from sb_processor.reconciliation.models import (
     FinalChangeSetState,
     IssueClassification,
     IssueOutcome,
+    ReconciledChangeStatus,
 )
 
 
@@ -101,6 +102,8 @@ def test_freeze_release_reconciliation_lifecycle_is_auditable_and_does_not_write
         elif (decision.category in {"link", "source_independent_wording"}
               or not source.content.strip()):
             selections[decision.id] = "DEFER"
+        elif "APPLY_RECONCILED_CHANGE" not in option_keys:
+            selections[decision.id] = "DEFER"
         else:
             selections[decision.id] = "APPLY_RECONCILED_CHANGE"
     resolved = reconcile(inputs, selections)
@@ -112,11 +115,9 @@ def test_freeze_release_reconciliation_lifecycle_is_auditable_and_does_not_write
                for item in resolved.final_change_set.human_decisions)
     preview = (resolved_output / "WRITE_PREVIEW.md").read_text(encoding="utf-8")
     assert "## UPDATE" in preview
-    assert "`Atlas/Dots/Clustering.md` — [diff](diffs/RC-006.diff)" in preview
-    diff = (resolved_output / "diffs/RC-006.diff").read_text(encoding="utf-8")
-    assert "--- a/Atlas/Dots/Clustering.md" in diff
-    assert "+++ b/Atlas/Dots/Clustering.md" in diff
-    assert "-**Source:**" in diff
+    resolved_clustering = by_path(resolved, "Atlas/Dots/Clustering.md")
+    assert resolved_clustering.status is ReconciledChangeStatus.BLOCKED
+    assert not (resolved_output / "diffs/RC-006.diff").exists()
 
     assert hashes(run) == run_before
     assert hashes(vault) == vault_before

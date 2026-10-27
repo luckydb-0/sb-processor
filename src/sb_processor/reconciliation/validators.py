@@ -79,8 +79,7 @@ def _dependency_only_blocked(change: ReconciledChange) -> bool:
 def _as_note_change(inputs: ReconciliationInputs, change: ReconciledChange,
                     *, allow_blocked: bool = False) -> NoteChange | None:
     if ((not allow_blocked
-         and change.status in (ReconciledChangeStatus.BLOCKED, ReconciledChangeStatus.DEFERRED)
-         and not _dependency_only_blocked(change))
+         and change.status in (ReconciledChangeStatus.BLOCKED, ReconciledChangeStatus.DEFERRED))
             or change.final_action not in (Action.CREATE, Action.UPDATE)
             or change.final_content is None):
         return None
@@ -275,7 +274,6 @@ def validate_final_changes(inputs: ReconciliationInputs,
     materialized = [(item, _as_note_change(inputs, item)) for item in changes]
     note_changes = [item for _, item in materialized if item is not None]
     vault_hashes = {note.path: note.content_hash for note in inputs.vault_notes}
-    blocked_identities = _blocked_identities(inputs, changes)
 
     for reconciled, note_change in materialized:
         if reconciled.status in (ReconciledChangeStatus.BLOCKED, ReconciledChangeStatus.DEFERRED):
@@ -329,11 +327,13 @@ def validate_final_changes(inputs: ReconciliationInputs,
             continue
         other = [item for item in note_changes if item is not note_change]
         for issue in validate_change(note_change, metadata, other):
-            code = issue.issue_type.value.upper()
+            # Wikilinks are validated against the complete effective registry and
+            # batch action state by reconciliation.dependencies. The review-layer
+            # validator only sees the currently materialized subset and therefore
+            # produces false negatives for valid same-batch targets.
             if issue.issue_type.value == "link":
-                match = re.search(r"Unresolved wikilink: \[\[([^\]]+)\]\]", issue.explanation)
-                if match and normalize(match.group(1).split("|", 1)[0].split("#", 1)[0]) in blocked_identities:
-                    code = "LINK_TO_BLOCKED_CHANGE"
+                continue
+            code = issue.issue_type.value.upper()
             findings.append(_finding(
                 code,
                 issue.explanation,
