@@ -46,6 +46,7 @@ def _verify_vault_snapshot(result: ReconciliationResult, inputs: ReconciliationI
 
 def _human_review(result: ReconciliationResult) -> str:
     final = result.final_change_set
+    change_by_id = {item.id: item for item in final.changes}
     ready = sum(item.status is ReconciledChangeStatus.READY for item in final.changes)
     fixed = sum(item.status is ReconciledChangeStatus.FIXED for item in final.changes)
     pending_decisions = [item for item in final.human_decisions
@@ -80,6 +81,15 @@ def _human_review(result: ReconciliationResult) -> str:
             "",
             f"**Status:** `{decision.status.value}`",
             "",
+            f"**Blocking:** `{'yes' if decision.blocking else 'no'}`",
+            "",
+            "**Affected changes**",
+            "",
+            *[
+                f"- `{change_by_id[change_id].final_target_path or change_by_id[change_id].original_target_path}`"
+                for change_id in decision.change_ids
+            ],
+            "",
             "**Question**",
             "",
             decision.question,
@@ -92,6 +102,10 @@ def _human_review(result: ReconciliationResult) -> str:
             "",
             decision.agent_b_position,
             "",
+            "**Evidence**",
+            "",
+            decision.context,
+            "",
         ])
         if decision.recommendation:
             lines.extend([
@@ -102,7 +116,8 @@ def _human_review(result: ReconciliationResult) -> str:
             ])
         lines.extend(["**Options**", ""])
         for option in decision.options:
-            lines.append(f"- `{option.key}` — {option.label}")
+            consequence = f" Consequence: {option.consequence}" if option.consequence else ""
+            lines.append(f"- `{option.key}` — {option.label}.{consequence}")
         if decision.selected_option:
             lines.extend(["", f"**Selected:** `{decision.selected_option}`"])
         lines.append("")
@@ -134,7 +149,8 @@ def _write_preview(root: Path, result: ReconciliationResult, inputs: Reconciliat
     groups: dict[str, list[str]] = {
         "CREATE": [],
         "UPDATE": [],
-        "NO_CHANGE": [],
+        "UNCHANGED": [],
+        "SKIPPED": [],
         "BLOCKED": [],
         "DEFERRED": [],
         "INVALID": [],
@@ -148,6 +164,8 @@ def _write_preview(root: Path, result: ReconciliationResult, inputs: Reconciliat
             groups["BLOCKED"].append(f"- `{path}`{suffix}")
         elif change.status is ReconciledChangeStatus.DEFERRED:
             groups["DEFERRED"].append(f"- `{path}`")
+        elif change.status is ReconciledChangeStatus.SKIPPED:
+            groups["SKIPPED"].append(f"- `{path}`")
         elif change.status is ReconciledChangeStatus.INVALID:
             groups["INVALID"].append(f"- `{path}`")
         elif change.final_action is Action.UPDATE:
@@ -156,13 +174,68 @@ def _write_preview(root: Path, result: ReconciliationResult, inputs: Reconciliat
         elif change.final_action is Action.CREATE:
             groups["CREATE"].append(f"- `{path}`")
         else:
-            groups["NO_CHANGE"].append(f"- `{path}`")
+            groups["UNCHANGED"].append(f"- `{path}`")
     lines = ["# Write Preview", "", f"State: `{final.state.value}`", "",
              "No vault files were written.", ""]
-    for name in ("CREATE", "UPDATE", "NO_CHANGE", "BLOCKED", "DEFERRED", "INVALID"):
+    for name in (
+        "CREATE", "UPDATE", "UNCHANGED", "SKIPPED", "DEFERRED", "BLOCKED", "INVALID"
+    ):
         lines.extend([f"## {name}", ""])
         lines.extend(groups[name] or ["None."])
         lines.append("")
+    lines.extend(["## Accepted risks", ""])
+    if final.accepted_risks:
+        for risk in final.accepted_risks:
+            lines.append(
+                f"- `{risk.id}` authorized by `{risk.decision_id}` — {risk.description}"
+            )
+            if risk.material_loss_ids:
+                lines.append(
+                    "  - Losses: " + ", ".join(f"`{item}`" for item in risk.material_loss_ids)
+                )
+            for evidence in risk.evidence:
+                lines.append(f"  - Evidence: {evidence}")
+    else:
+        lines.append("None.")
+    lines.extend(["", "## Blocking issues", ""])
+    blocking: list[str] = []
+    for decision in final.human_decisions:
+        if decision.blocking and decision.status is DecisionStatus.PENDING:
+            blocking.append(f"- `{decision.id}` — {decision.question}")
+    for collision in final.identity_collisions:
+        if collision.blocking:
+            blocking.append(
+                f"- `{collision.id}` — ambiguous identity `{collision.normalized_identity}`"
+            )
+    for dependency in final.dependencies:
+        if dependency.blocking:
+            blocking.append(
+                f"- `{dependency.id}` — `{dependency.source_path}` uses "
+                f"`{dependency.token}`: `{dependency.target_state.value}`"
+            )
+    for change in final.changes:
+        for loss in change.material_losses:
+            if loss.disposition.value == "ISSUE_UNRESOLVED":
+                blocking.append(
+                    f"- `{loss.id}` — unacknowledged {loss.kind.value.lower()} loss in "
+                    f"`{change.final_target_path or change.original_target_path}`"
+                )
+    lines.extend(blocking or ["None."])
+    lines.extend(["", "## Dependencies", ""])
+    if final.dependencies:
+        for dependency in final.dependencies:
+            target = f" → `{dependency.target_path}`" if dependency.target_path else ""
+            root_decision = (
+                f"; root decision `{dependency.root_decision_id}`"
+                if dependency.root_decision_id else ""
+            )
+            lines.append(
+                f"- `{dependency.source_path}`: `{dependency.token}` → "
+                f"`{dependency.target_state.value}`{target}{root_decision}"
+            )
+    else:
+        lines.append("None.")
+    lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 

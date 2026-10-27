@@ -77,17 +77,35 @@ def _decision(decision_id: str, change_id: str, issue: ReconciledIssue,
         question = f"Should `{change.target_path}` proceed with this unresolved {issue.issue_type.value} issue?"
     options = [
         DecisionOption(key="APPLY_RECONCILED_CHANGE", label="Apply the staged change",
-                       effect=DecisionEffect.APPLY_RECONCILED_CHANGE),
+                       effect=DecisionEffect.APPLY_RECONCILED_CHANGE,
+                       consequence=(
+                           "Apply the staged note content, subject to all mandatory "
+                           "pre-write validations."
+                       )),
     ]
     if unresolved_link and unresolved_link in change.content:
         options.append(DecisionOption(
             key="REMOVE_LINK",
             label="Remove only the wikilink markup",
             effect=DecisionEffect.REMOVE_LINK,
+            consequence=(
+                "Remove only the exact wikilink markup and preserve its visible text, "
+                "then revalidate the note."
+            ),
         ))
     options.extend([
-        DecisionOption(key="SKIP_CHANGE", label="Skip this change", effect=DecisionEffect.SKIP_CHANGE),
-        DecisionOption(key="DEFER", label="Defer this change", effect=DecisionEffect.DEFER),
+        DecisionOption(
+            key="SKIP_CHANGE",
+            label="Skip this change",
+            effect=DecisionEffect.SKIP_CHANGE,
+            consequence="Exclude the change from the applicable set.",
+        ),
+        DecisionOption(
+            key="DEFER",
+            label="Defer this change",
+            effect=DecisionEffect.DEFER,
+            consequence="Exclude the change and recompute every dependent note.",
+        ),
     ])
     return HumanDecision(
         id=decision_id,

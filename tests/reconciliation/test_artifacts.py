@@ -82,7 +82,13 @@ def test_human_review_is_concise_and_contains_machine_matching_decisions(tmp_pat
     assert "Needs your decision: 1" in markdown
     assert "HR-001" in markdown
     assert "Should `Dots/Blocked.md` keep the unresolved wikilink `[[Missing]]`?" in markdown
-    assert "APPLY_RECONCILED_CHANGE" in markdown
+    assert "**Blocking:** `yes`" in markdown
+    assert "**Affected changes**" in markdown
+    assert "`Dots/Blocked.md`" in markdown
+    assert "**Evidence**" in markdown
+    assert "Unresolved wikilink: [[Missing]]" in markdown
+    assert "REMOVE_LINK" in markdown
+    assert "Remove only the exact wikilink markup" in markdown
     assert "developer" not in markdown.casefold()
     assert machine["decisions"][0]["id"] == "HR-001"
     assert machine["decisions"][0]["status"] == "PENDING"
@@ -112,15 +118,57 @@ def test_write_preview_groups_actions_and_links_stable_update_diff(tmp_path: Pat
 
     preview = (output / "WRITE_PREVIEW.md").read_text(encoding="utf-8")
     diff = (output / "diffs" / "RC-002.diff").read_text(encoding="utf-8")
+    for section in (
+        "CREATE", "UPDATE", "UNCHANGED", "SKIPPED", "DEFERRED", "BLOCKED", "INVALID",
+        "Accepted risks", "Blocking issues", "Dependencies",
+    ):
+        assert f"## {section}" in preview
     assert "## CREATE" in preview
     assert "`Dots/New Topic.md`" in preview
     assert "## UPDATE" in preview
     assert "`Dots/Existing.md` — [diff](diffs/RC-002.diff)" in preview
     assert "## BLOCKED" in preview
     assert "`Dots/Blocked.md` — HR-001 pending" in preview
+    assert "TARGET_MISSING" in preview
+    assert "[[Missing]]" in preview
     assert "--- a/Dots/Existing.md" in diff
     assert "+++ b/Dots/Existing.md" in diff
     assert "+A new supported sentence." in diff
+
+
+def test_write_preview_shows_explicitly_accepted_content_loss(tmp_path: Path):
+    run = tmp_path / "run_loss"
+    existing = (
+        "---\ntype: concept\n---\n# Dataset\n\n## Context\n\n"
+        "A dataset can retain labels, provenance, field definitions, and measurement details.\n"
+    )
+    final = "---\ntype: concept\n---\n# Dataset\n\nReplacement.\n"
+    write_run(
+        run,
+        proposal([change(
+            path="Dots/Dataset.md",
+            action="UPDATE",
+            content=final,
+            original_content_hash=hashlib.sha256(existing.encode()).hexdigest(),
+        )]),
+        review([reviewed_change("Dots/Dataset.md")]),
+    )
+    vault = tmp_path / "vault_loss"
+    vault.mkdir()
+    write_note(vault, "Dots/Dataset.md", existing)
+    inputs = load_reconciliation_inputs(run, vault)
+    result = reconcile(inputs, {"HR-001": "ACKNOWLEDGE_CONTENT_LOSS"})
+
+    output = stage_reconciliation(run, result, inputs)
+    preview = (output / "WRITE_PREVIEW.md").read_text(encoding="utf-8")
+
+    assert "## Accepted risks" in preview
+    assert "RISK-001" in preview
+    assert "HR-001" in preview
+    assert "LOSS-RC-001-01" in preview
+    assert "LOSS-RC-001-02" in preview
+    assert "labels, provenance, field definitions" in preview
+    assert "`Dots/Dataset.md` — [diff](diffs/RC-001.diff)" in preview
 
 
 def test_json_artifacts_share_the_same_final_change_set_state(tmp_path: Path):

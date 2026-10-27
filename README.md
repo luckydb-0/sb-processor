@@ -80,9 +80,9 @@ The normal workflow is:
 3. Rerun with `--decisions decisions.json`.
 4. Inspect `WRITE_PREVIEW.md` and its UPDATE diffs.
 
-`PENDING_HUMAN_REVIEW` means at least one blocking choice remains. `READY_FOR_WRITE` means the selected write set has no pending decisions or deterministic validation errors; it does **not** mean any vault file was changed. `INVALID` means a structural/content validator or conflict gate failed. Skipped and deferred changes remain explicit and are excluded from the future write set. Reconciliation always starts from the preserved Agent A and Agent B artifacts, verifies their hashes while staging output, and never writes to the vault.
+`PENDING_HUMAN_REVIEW` means at least one blocking choice remains. `READY_FOR_WRITE` means only that the applicable subset passes the mandatory identity, dependency, path, frontmatter, conflict, and content-preservation gates; it does **not** authorize a write or mean any vault file was changed. `INVALID` means an included change failed a structural/content validator or conflict gate. Skipped, deferred, and blocked changes remain explicit and are excluded from the future write set. Reconciliation always starts from the preserved Agent A and Agent B artifacts, verifies their hashes while staging output, and never writes to the vault.
 
-For an unresolved exact wikilink, `REMOVE_LINK` removes only the `[[...]]` markup and preserves its visible text; it never invents a replacement target. The [v1 evaluation](docs/reconciliation-v1-evaluation.md) records the frozen-fixture lifecycle, hashes, validation evidence, and freeze recommendation.
+`HUMAN_REVIEW.md` lists only pending root decisions, every affected note, evidence, and the exact consequence of each offered option. `WRITE_PREVIEW.md` separates `CREATE`, `UPDATE`, `UNCHANGED`, `SKIPPED`, `DEFERRED`, `BLOCKED`, and `INVALID`; it also exposes accepted risks, blocking issues, and batch dependencies. Material existing-content removal requires `ACKNOWLEDGE_CONTENT_LOSS` and remains visible as an accepted risk. For an unresolved exact wikilink, `REMOVE_LINK` removes only the `[[...]]` markup and preserves its visible text; it never invents a replacement target. The [v1 evaluation](docs/reconciliation-v1-evaluation.md) records the original frozen-fixture lifecycle.
 
 ## PDF ingestion and extractor comparison
 
