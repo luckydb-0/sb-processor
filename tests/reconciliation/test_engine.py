@@ -13,6 +13,7 @@ from sb_processor.reconciliation.models import (
     FinalChangeSetState,
     IssueClassification,
     IssueOutcome,
+    IssueResolutionDisposition,
     ReconciledChangeStatus,
 )
 
@@ -300,7 +301,7 @@ def test_resolved_decision_can_skip_change(tmp_path: Path):
     assert decision.status is DecisionStatus.RESOLVED
     assert reconciled.final_action.value == "NO_CHANGE"
     assert reconciled.final_content is None
-    assert reconciled.status is ReconciledChangeStatus.READY
+    assert reconciled.status is ReconciledChangeStatus.SKIPPED
 
 
 def test_deferred_decision_remains_explicit_but_is_not_pending(tmp_path: Path):
@@ -409,12 +410,17 @@ def test_update_paragraph_loss_generates_preservation_decision(tmp_path: Path):
 
     decision = result.final_change_set.human_decisions[0]
     assert decision.id == "HR-001"
-    assert decision.category == "cumulative_integrity"
-    assert "preserve" in decision.question.casefold()
+    assert decision.category == DecisionCategory.CONTENT_PRESERVATION.value
+    assert [option.key for option in decision.options] == [
+        "ACKNOWLEDGE_CONTENT_LOSS", "SKIP_CHANGE", "DEFER"
+    ]
+    assert "paragraph" in decision.context.casefold()
+    assert len(result.final_change_set.changes[0].material_losses) == 1
+    assert result.final_change_set.applicable_change_ids == []
     assert result.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
 
 
-def test_resolved_preservation_decision_allows_ready_state_with_audited_warning(tmp_path: Path):
+def test_generic_approval_cannot_bypass_material_content_loss(tmp_path: Path):
     existing = (
         "---\ntype: concept\n---\n# Topic\n\n"
         "This useful existing paragraph contains durable knowledge that should not silently disappear.\n"
@@ -428,11 +434,101 @@ def test_resolved_preservation_decision_allows_ready_state_with_audited_warning(
         vault_contents={"Dots/Topic.md": existing},
     )
 
-    result = reconcile(inputs, {"HR-001": "APPLY_RECONCILED_CHANGE"})
+    with pytest.raises(ValueError, match="Invalid option for HR-001"):
+        reconcile(inputs, {"HR-001": "APPLY_RECONCILED_CHANGE"})
+
+
+def test_explicit_content_loss_acceptance_is_audited_and_can_be_ready(tmp_path: Path):
+    existing = (
+        "---\ntype: concept\n---\n# Dataset\n\n## Durable Context\n\n"
+        "A dataset may include records, fields, measurements, labels, and provenance details.\n"
+    )
+    final = "---\ntype: concept\n---\n# Dataset\n\nA replacement definition.\n"
+    issues = [
+        review_issue(
+            "Dots/Dataset.md",
+            "cumulative_integrity",
+            "Preserve the useful existing details or explicitly acknowledge their removal",
+            explanation="The existing Dataset note contains useful details missing from the update.",
+        ),
+        review_issue(
+            "Dots/Dataset.md",
+            "existing_note",
+            "Resolve the existing-note preservation concern",
+            explanation="The update may discard durable knowledge from Dataset.",
+        ),
+    ]
+    inputs = loaded_inputs(
+        tmp_path,
+        [change(
+            path="Dots/Dataset.md",
+            content=final,
+            action="UPDATE",
+            original_content_hash=hashlib.sha256(existing.encode()).hexdigest(),
+        )],
+        [reviewed_change(
+            "Dots/Dataset.md", status="REVIEW_REQUIRED", issue_indices=[0, 1]
+        )],
+        issues,
+        vault_contents={"Dots/Dataset.md": existing},
+    )
+
+    pending = reconcile(inputs)
+    assert len(pending.final_change_set.human_decisions) == 1
+    decision = pending.final_change_set.human_decisions[0]
+    assert decision.category == DecisionCategory.CONTENT_PRESERVATION.value
+    assert set(decision.issue_ids) == {"RC-001-I01", "RC-001-I02"}
+    assert len(pending.final_change_set.changes[0].material_losses) == 2
+
+    result = reconcile(inputs, {decision.id: "ACKNOWLEDGE_CONTENT_LOSS"})
 
     assert result.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
     assert result.final_change_set.unresolved_decision_ids == []
-    assert {item.code for item in result.final_change_set.validation_findings} == {"UPDATE_PARAGRAPH_LOSS"}
+    assert result.final_change_set.applicable_change_ids == ["RC-001"]
+    assert len(result.final_change_set.accepted_risks) == 1
+    risk = result.final_change_set.accepted_risks[0]
+    assert risk.decision_id == decision.id
+    assert risk.material_loss_ids == ["LOSS-RC-001-01", "LOSS-RC-001-02"]
+    assert "records, fields, measurements" in " ".join(risk.evidence)
+    assert all(
+        item.disposition is IssueResolutionDisposition.ISSUE_EXPLICITLY_ACCEPTED
+        for item in result.final_change_set.changes[0].material_losses
+    )
+    assert all(
+        item.resolution is IssueResolutionDisposition.ISSUE_EXPLICITLY_ACCEPTED
+        for item in result.final_change_set.changes[0].issues
+    )
+    assert {item.code for item in result.final_change_set.validation_findings} == {
+        "UPDATE_HEADING_LOSS", "UPDATE_PARAGRAPH_LOSS"
+    }
+
+
+def test_only_safe_included_changes_are_in_applicable_subset(tmp_path: Path):
+    unresolved = change(
+        path="Dots/Unsafe.md",
+        action="REVIEW_REQUIRED",
+        content="---\ntype: concept\n---\n# Unsafe\nDraft.\n",
+    )
+    safe = change(
+        path="Dots/Safe.md",
+        content="---\ntype: concept\n---\n# Safe\nSupported.\n",
+    )
+    inputs = loaded_inputs(
+        tmp_path,
+        [unresolved, safe],
+        [
+            reviewed_change("Dots/Unsafe.md", status="REVIEW_REQUIRED"),
+            reviewed_change("Dots/Safe.md"),
+        ],
+    )
+
+    pending = reconcile(inputs)
+    assert pending.final_change_set.applicable_change_ids == ["RC-002"]
+
+    deferred = reconcile(inputs, {"HR-001": "DEFER"})
+    assert deferred.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
+    assert deferred.final_change_set.applicable_change_ids == ["RC-002"]
+    assert deferred.final_change_set.changes[0].status is ReconciledChangeStatus.DEFERRED
 
 
 def test_link_to_blocked_change_is_exposed_as_dependent_human_decision(tmp_path: Path):

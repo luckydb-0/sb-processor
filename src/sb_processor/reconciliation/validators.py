@@ -10,7 +10,14 @@ from ..knowledge.retrieval import RetrievalPolicy
 from ..review.validators import validate_change
 from ..knowledge.registry import normalize
 from .inputs import ReconciliationInputs, resolve_vault_target
-from .models import ReconciledChange, ReconciledChangeStatus, ValidationFinding, ValidationSeverity
+from .models import (
+    MaterialLossKind,
+    MaterialLossRecord,
+    ReconciledChange,
+    ReconciledChangeStatus,
+    ValidationFinding,
+    ValidationSeverity,
+)
 
 
 def _finding(code: str, message: str, *change_ids: str,
@@ -161,6 +168,13 @@ def _normalized_headings(content: str) -> set[str]:
     return {" ".join(match.group(1).split()).casefold() for match in _HEADING.finditer(_body(content))}
 
 
+def _headings(content: str) -> list[tuple[str, str]]:
+    return [
+        (" ".join(match.group(1).split()).casefold(), " ".join(match.group(1).split()))
+        for match in _HEADING.finditer(_body(content))
+    ]
+
+
 def _normalized_paragraphs(content: str) -> list[str]:
     result = []
     for block in re.split(r"\r?\n\s*\r?\n", _body(content)):
@@ -171,9 +185,12 @@ def _normalized_paragraphs(content: str) -> list[str]:
     return result
 
 
-def _preservation_findings(inputs: ReconciliationInputs,
-                           change: ReconciledChange) -> list[ValidationFinding]:
-    if change.final_action is not Action.UPDATE or change.final_content is None:
+def material_losses(inputs: ReconciliationInputs,
+                    change: ReconciledChange) -> list[MaterialLossRecord]:
+    """Return stable, itemized knowledge-loss candidates for one staged UPDATE."""
+    if (change.final_action is not Action.UPDATE
+            or change.final_content is None
+            or not change.final_content.strip()):
         return []
     target = resolve_vault_target(
         inputs.vault, change.final_target_path or change.original_target_path
@@ -182,35 +199,55 @@ def _preservation_findings(inputs: ReconciliationInputs,
         return []
     existing = target.read_text(encoding="utf-8")
     final_headings = _normalized_headings(change.final_content)
-    findings = []
-    for heading in sorted(_normalized_headings(existing) - final_headings):
-        findings.append(_finding(
-            "UPDATE_HEADING_LOSS",
-            f"Existing heading is absent from the final update: {heading}",
-            change.id,
-            severity=ValidationSeverity.WARNING,
-        ))
+    candidates: list[tuple[MaterialLossKind, str]] = []
+    for normalized, heading in _headings(existing):
+        if normalized not in final_headings:
+            candidates.append((MaterialLossKind.HEADING, heading))
     final_paragraphs = _normalized_paragraphs(change.final_content)
     for paragraph in _normalized_paragraphs(existing):
-        candidates = [paragraph]
+        paragraph_candidates = [paragraph]
         patched = paragraph
         for patch in change.applied_fixes:
             if patch.before in patched:
                 patched = patched.replace(patch.before, patch.after, 1)
         if patched != paragraph:
-            candidates.append(" ".join(patched.split()))
+            paragraph_candidates.append(" ".join(patched.split()))
         preserved = any(
             SequenceMatcher(None, candidate, final).ratio() >= 0.90
-            for candidate in candidates
+            for candidate in paragraph_candidates
             for final in final_paragraphs
         )
         if not preserved:
-            findings.append(_finding(
-                "UPDATE_PARAGRAPH_LOSS",
-                f"Existing paragraph has no preserved counterpart: {paragraph[:120]}",
-                change.id,
-                severity=ValidationSeverity.WARNING,
-            ))
+            candidates.append((MaterialLossKind.PARAGRAPH, paragraph))
+    source_hash = hashlib.sha256(existing.encode("utf-8")).hexdigest()
+    return [
+        MaterialLossRecord(
+            id=f"LOSS-{change.id}-{index:02d}",
+            change_id=change.id,
+            kind=kind,
+            excerpt=excerpt,
+            source_content_sha256=source_hash,
+        )
+        for index, (kind, excerpt) in enumerate(candidates, 1)
+    ]
+
+
+def _preservation_findings(inputs: ReconciliationInputs,
+                           change: ReconciledChange) -> list[ValidationFinding]:
+    findings: list[ValidationFinding] = []
+    for loss in material_losses(inputs, change):
+        if loss.kind is MaterialLossKind.HEADING:
+            code = "UPDATE_HEADING_LOSS"
+            message = f"Existing heading is absent from the final update: {loss.excerpt}"
+        else:
+            code = "UPDATE_PARAGRAPH_LOSS"
+            message = f"Existing paragraph has no preserved counterpart: {loss.excerpt[:120]}"
+        findings.append(_finding(
+            code,
+            message,
+            change.id,
+            severity=ValidationSeverity.WARNING,
+        ))
     return findings
 
 

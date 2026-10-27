@@ -14,6 +14,7 @@ from .identities import (
 )
 from .inputs import ReconciliationInputs, resolve_vault_target
 from .models import (
+    AcceptedRisk,
     DecisionEffect,
     DecisionCategory,
     DecisionOption,
@@ -32,7 +33,7 @@ from .models import (
     PatchOperation,
     ValidationSeverity,
 )
-from .validators import validate_final_changes
+from .validators import material_losses, validate_final_changes
 
 
 RECONCILIATION_VERSION = "reconciliation-v1.1"
@@ -356,6 +357,94 @@ def _reconcile_dependency_decisions(
     decisions.sort(key=lambda item: int(item.id.removeprefix("HR-")))
 
 
+def _group_content_preservation_decisions(
+        inputs: ReconciliationInputs,
+        changes: list[ReconciledChange],
+        decisions: list[HumanDecision]) -> None:
+    for change in changes:
+        losses = material_losses(inputs, change)
+        if not losses:
+            continue
+        change.material_losses = losses
+        preservation_issues = [
+            issue for issue in change.issues
+            if issue.issue_type.value in ("cumulative_integrity", "existing_note")
+        ]
+        old_ids = {
+            issue.human_decision_id for issue in preservation_issues
+            if issue.human_decision_id is not None
+        }
+        root_id = sorted(old_ids)[0] if old_ids else _next_decision_id(decisions)
+        issue_ids = _replace_issue_decisions(changes, old_ids, root_id)
+        if not issue_ids:
+            synthetic = ReconciledIssue(
+                id=f"{change.id}-I{len(change.issues) + 1:02d}",
+                agent_b_issue_index=-1,
+                issue_type="cumulative_integrity",
+                explanation="The staged update omits material existing content.",
+                proposed_correction=(
+                    "Preserve the listed content or explicitly acknowledge its removal"
+                ),
+                classification=IssueClassification.AMBIGUOUS,
+                outcome=IssueOutcome.HUMAN_REQUIRED,
+                human_decision_id=root_id,
+            )
+            change.issues.append(synthetic)
+            issue_ids.append(synthetic.id)
+            if root_id not in change.human_decision_ids:
+                change.human_decision_ids.append(root_id)
+        _drop_decisions(decisions, old_ids)
+        for loss in losses:
+            loss.decision_id = root_id
+        evidence = "\n".join(
+            f"- {loss.kind.value.lower()}: {loss.excerpt}" for loss in losses
+        )
+        decisions.append(HumanDecision(
+            id=root_id,
+            change_ids=[change.id],
+            issue_ids=sorted(set(issue_ids)),
+            category=DecisionCategory.CONTENT_PRESERVATION.value,
+            status=DecisionStatus.PENDING,
+            question=(
+                f"Should the listed existing content be intentionally removed from "
+                f"`{change.final_target_path or change.original_target_path}`?"
+            ),
+            context=evidence,
+            agent_a_position="Apply the staged update.",
+            agent_b_position="Preserve useful existing knowledge unless removal is explicit.",
+            recommendation="DEFER",
+            rationale="General approval is not authorization for itemized knowledge loss.",
+            confidence="high",
+            options=[
+                DecisionOption(
+                    key="ACKNOWLEDGE_CONTENT_LOSS",
+                    label="Acknowledge the listed removals",
+                    effect=DecisionEffect.ACKNOWLEDGE_CONTENT_LOSS,
+                    consequence=(
+                        "Apply the update, record every listed loss as an accepted risk, "
+                        "and retain the authorization in the final preview."
+                    ),
+                ),
+                DecisionOption(
+                    key="SKIP_CHANGE",
+                    label="Skip this update",
+                    effect=DecisionEffect.SKIP_CHANGE,
+                    consequence="Exclude the update and retain the existing vault note.",
+                ),
+                DecisionOption(
+                    key="DEFER",
+                    label="Defer this update",
+                    effect=DecisionEffect.DEFER,
+                    consequence="Exclude the update pending a content-preserving revision.",
+                ),
+            ],
+            blocking=True,
+        ))
+        change.human_decision_required = True
+        change.status = ReconciledChangeStatus.BLOCKED
+    decisions.sort(key=lambda item: int(item.id.removeprefix("HR-")))
+
+
 def reconcile(inputs: ReconciliationInputs,
               selections: dict[str, str] | None = None) -> ReconciliationResult:
     """Reconcile every reviewed issue in stable proposal order."""
@@ -460,39 +549,8 @@ def reconcile(inputs: ReconciliationInputs,
             status=status,
         ))
 
-    preliminary_findings = validate_final_changes(inputs, reconciled_changes)
-    preservation_by_change: dict[str, list] = {}
-    for finding in preliminary_findings:
-        if finding.severity is not ValidationSeverity.WARNING or not finding.code.startswith("UPDATE_"):
-            continue
-        for change_id in finding.change_ids:
-            preservation_by_change.setdefault(change_id, []).append(finding)
     change_by_id = {item.id: item for item in reconciled_changes}
-    for change_id, findings in preservation_by_change.items():
-        reconciled = change_by_id[change_id]
-        if any(issue.issue_type.value in ("cumulative_integrity", "existing_note")
-               and issue.human_decision_id for issue in reconciled.issues):
-            continue
-        decision_number += 1
-        decision_id = f"HR-{decision_number:03d}"
-        issue_id = f"{change_id}-I{len(reconciled.issues) + 1:02d}"
-        explanation = " ".join(finding.message for finding in findings)
-        synthetic = ReconciledIssue(
-            id=issue_id,
-            agent_b_issue_index=-1,
-            issue_type="cumulative_integrity",
-            explanation=explanation,
-            proposed_correction="Confirm the content loss, skip the change, or defer it",
-            classification=IssueClassification.AMBIGUOUS,
-            outcome=IssueOutcome.HUMAN_REQUIRED,
-            human_decision_id=decision_id,
-        )
-        reconciled.issues.append(synthetic)
-        reconciled.human_decision_ids.append(decision_id)
-        reconciled.human_decision_required = True
-        reconciled.status = ReconciledChangeStatus.BLOCKED
-        source = inputs.reviewed_proposal.note_changes[reconciled.agent_a_change_index]
-        decisions.append(_decision(decision_id, change_id, synthetic, source))
+    _group_content_preservation_decisions(inputs, reconciled_changes, decisions)
 
     initial_identities = build_effective_identity_registry(inputs, reconciled_changes)
     initial_dependencies = analyze_dependencies(
@@ -524,8 +582,11 @@ def reconcile(inputs: ReconciliationInputs,
         if option.effect is not DecisionEffect.REMOVE_LINK:
             for change_id in _direct_change_ids(decision):
                 selected_effects_by_change.setdefault(change_id, set()).add(option.effect)
-    conflicting = sorted(change_id for change_id, effects in selected_effects_by_change.items()
-                         if len(effects) > 1)
+    excluding_effects = {DecisionEffect.DEFER, DecisionEffect.SKIP_CHANGE}
+    conflicting = sorted(
+        change_id for change_id, effects in selected_effects_by_change.items()
+        if effects & excluding_effects and len(effects) > 1
+    )
     if conflicting:
         raise ValueError(f"Conflicting decision effects for changes: {', '.join(conflicting)}")
 
@@ -533,6 +594,7 @@ def reconcile(inputs: ReconciliationInputs,
         selections.items(),
         key=lambda item: selection_options[item[0]].effect is not DecisionEffect.REMOVE_LINK,
     )
+    accepted_risks: list[AcceptedRisk] = []
     for decision_id, selected in ordered_selections:
         decision = decision_by_id[decision_id]
         option = selection_options[decision_id]
@@ -587,6 +649,17 @@ def reconcile(inputs: ReconciliationInputs,
                             )
             elif option.effect is DecisionEffect.REMOVE_LINK:
                 pass
+            elif option.effect is DecisionEffect.ACKNOWLEDGE_CONTENT_LOSS:
+                for loss in reconciled.material_losses:
+                    if loss.decision_id == decision_id:
+                        loss.disposition = (
+                            IssueResolutionDisposition.ISSUE_EXPLICITLY_ACCEPTED
+                        )
+                for reconciled_issue in reconciled.issues:
+                    if reconciled_issue.id in decision.issue_ids:
+                        reconciled_issue.resolution = (
+                            IssueResolutionDisposition.ISSUE_EXPLICITLY_ACCEPTED
+                        )
             elif option.effect is DecisionEffect.SKIP_CHANGE:
                 reconciled.final_action = Action.NO_CHANGE
                 reconciled.final_content = None
@@ -595,6 +668,24 @@ def reconcile(inputs: ReconciliationInputs,
                 reconciled.final_action = None
                 reconciled.final_content = None
                 reconciled.final_content_sha256 = None
+        if option.effect is DecisionEffect.ACKNOWLEDGE_CONTENT_LOSS:
+            covered_losses = [
+                loss
+                for change_id in _direct_change_ids(decision)
+                for loss in change_by_id[change_id].material_losses
+                if loss.decision_id == decision_id
+            ]
+            accepted_risks.append(AcceptedRisk(
+                id=f"RISK-{len(accepted_risks) + 1:03d}",
+                category=DecisionCategory.CONTENT_PRESERVATION,
+                change_ids=_direct_change_ids(decision),
+                issue_ids=list(decision.issue_ids),
+                material_loss_ids=[item.id for item in covered_losses],
+                decision_id=decision_id,
+                selected_option=selected,
+                description="Explicitly accepted removal of listed existing content.",
+                evidence=[item.excerpt for item in covered_losses],
+            ))
 
     direct_decisions_by_change: dict[str, list[HumanDecision]] = {}
     for decision in decisions:
@@ -610,12 +701,42 @@ def reconcile(inputs: ReconciliationInputs,
             reconciled.status = ReconciledChangeStatus.BLOCKED
         elif any(item.status is DecisionStatus.DEFERRED for item in direct_related):
             reconciled.status = ReconciledChangeStatus.DEFERRED
+        elif any(
+            selection_options.get(item.id) is not None
+            and selection_options[item.id].effect is DecisionEffect.SKIP_CHANGE
+            for item in direct_related
+        ):
+            reconciled.status = ReconciledChangeStatus.SKIPPED
         elif reconciled.final_action is Action.NO_CHANGE:
             reconciled.status = ReconciledChangeStatus.READY
         elif reconciled.applied_fixes:
             reconciled.status = ReconciledChangeStatus.FIXED
         else:
             reconciled.status = ReconciledChangeStatus.READY
+
+    for reconciled in reconciled_changes:
+        if reconciled.status in (
+            ReconciledChangeStatus.DEFERRED,
+            ReconciledChangeStatus.SKIPPED,
+        ):
+            continue
+        previous = {item.id: item for item in reconciled.material_losses}
+        refreshed = material_losses(inputs, reconciled)
+        for loss in refreshed:
+            prior = previous.get(loss.id)
+            if (prior is not None
+                    and prior.excerpt == loss.excerpt
+                    and prior.source_content_sha256 == loss.source_content_sha256
+                    and prior.disposition
+                    is IssueResolutionDisposition.ISSUE_EXPLICITLY_ACCEPTED):
+                loss.disposition = prior.disposition
+                loss.decision_id = prior.decision_id
+        reconciled.material_losses = refreshed
+        if any(
+            item.disposition is IssueResolutionDisposition.ISSUE_UNRESOLVED
+            for item in refreshed
+        ):
+            reconciled.status = ReconciledChangeStatus.BLOCKED
 
     final_identities = build_effective_identity_registry(inputs, reconciled_changes)
     final_dependencies = analyze_dependencies(inputs, reconciled_changes, final_identities)
@@ -650,6 +771,7 @@ def reconcile(inputs: ReconciliationInputs,
         validation_findings=final_findings,
         dependencies=final_dependencies,
         identity_collisions=list(final_identities.collisions),
+        accepted_risks=accepted_risks,
         applicable_change_ids=[
             item.id for item in reconciled_changes
             if item.status in (

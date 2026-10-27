@@ -102,6 +102,8 @@ def test_freeze_release_reconciliation_lifecycle_is_auditable_and_does_not_write
         elif (decision.category in {"link", "source_independent_wording"}
               or not source.content.strip()):
             selections[decision.id] = "DEFER"
+        elif "ACKNOWLEDGE_CONTENT_LOSS" in option_keys:
+            selections[decision.id] = "ACKNOWLEDGE_CONTENT_LOSS"
         elif "APPLY_RECONCILED_CHANGE" not in option_keys:
             selections[decision.id] = "DEFER"
         else:

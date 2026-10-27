@@ -6,7 +6,7 @@ from pathlib import Path
 from sb_processor.reconciliation.engine import reconcile
 from sb_processor.reconciliation.inputs import load_reconciliation_inputs, resolve_vault_target
 from sb_processor.reconciliation.models import PatchKind, PatchOperation
-from sb_processor.reconciliation.validators import validate_final_changes
+from sb_processor.reconciliation.validators import material_losses, validate_final_changes
 
 from .helpers import change, proposal, review, reviewed_change, write_note, write_run
 
@@ -313,3 +313,14 @@ def test_unexplained_heading_and_paragraph_loss_requires_preservation_review(tmp
 
     assert "UPDATE_HEADING_LOSS" in warning_codes(findings)
     assert "UPDATE_PARAGRAPH_LOSS" in warning_codes(findings)
+
+    losses = material_losses(inputs, changes[0])
+    assert [item.id for item in losses] == ["LOSS-RC-001-01", "LOSS-RC-001-02"]
+    assert [item.kind.value for item in losses] == ["HEADING", "PARAGRAPH"]
+    assert losses[0].excerpt == "Important Context"
+    assert losses[1].excerpt == (
+        "This useful existing paragraph contains durable knowledge that should not "
+        "silently disappear."
+    )
+    assert all(item.source_content_sha256 == hashlib.sha256(existing.encode()).hexdigest()
+               for item in losses)
