@@ -1,7 +1,7 @@
 # Reconciliation v1.2 Freeze Evaluation
 
-Date: 2026-10-28  
-Branch: `main`  
+Date: 2026-10-28
+Branch: `main`
 Engine: `reconciliation-v1.2`
 
 ## Verdict
