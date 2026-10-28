@@ -252,6 +252,7 @@ class FinalChangeSet(StrictModel):
     pre_review_adjustments: list[PreReviewAdjustment]
     changes: list[ReconciledChange]
     human_decisions: list[HumanDecision]
+    decision_id_remap: dict[str, str] = Field(default_factory=dict)
     unresolved_decision_ids: list[str]
     validation_findings: list[ValidationFinding]
     state: FinalChangeSetState

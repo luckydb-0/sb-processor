@@ -93,6 +93,7 @@ def test_human_review_is_concise_and_contains_machine_matching_decisions(tmp_pat
     assert machine["decisions"][0]["id"] == "HR-001"
     assert machine["decisions"][0]["status"] == "PENDING"
     assert machine["decisions"][0]["selected_option"] is None
+    assert machine["decision_id_remap"] == {}
     assert [item["key"] for item in machine["decisions"][0]["options"]] == [
         "REMOVE_LINK", "SKIP_CHANGE", "DEFER"
     ]

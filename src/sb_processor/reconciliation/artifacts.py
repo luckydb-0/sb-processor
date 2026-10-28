@@ -278,6 +278,7 @@ def stage_reconciliation(run: Path, result: ReconciliationResult,
         )
         decision_payload = {
             "source_run_id": final.source_run_id,
+            "decision_id_remap": final.decision_id_remap,
             "decisions": [item.model_dump(mode="json") for item in final.human_decisions],
         }
         (temporary / "human_decisions.json").write_text(

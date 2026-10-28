@@ -226,6 +226,68 @@ def test_unresolved_dependency_cannot_be_generically_approved(tmp_path: Path):
         reconcile(inputs, {"HR-001": "APPLY_RECONCILED_CHANGE"})
 
 
+def test_grouped_dependency_decisions_remap_every_reference_deterministically(
+        tmp_path: Path):
+    other = "---\ntype: concept\n---\n# Other\nSee [[Missing]].\n"
+    target = "---\ntype: concept\n---\n# Target\nSee [[Missing]].\n"
+    consumer = "---\ntype: concept\n---\n# Consumer\nSee [[Target]].\n"
+    issues = [
+        review_issue(
+            "Dots/Other.md",
+            "link",
+            "Use a verified canonical target or remove the link",
+            explanation="Unresolved wikilink: [[Missing]]",
+        ),
+        review_issue(
+            "Dots/Target.md",
+            "link",
+            "Use a verified canonical target or remove the link",
+            explanation="Unresolved wikilink: [[Missing]]",
+        ),
+    ]
+    inputs = loaded_inputs(
+        tmp_path,
+        [
+            change(path="Dots/Other.md", content=other),
+            change(path="Dots/Target.md", content=target),
+            change(path="Dots/Consumer.md", content=consumer),
+        ],
+        [
+            reviewed_change("Dots/Other.md", status="FIX", issue_indices=[0]),
+            reviewed_change("Dots/Target.md", status="FIX", issue_indices=[1]),
+            reviewed_change("Dots/Consumer.md"),
+        ],
+        issues,
+    )
+
+    first = reconcile(inputs).final_change_set
+    replay = reconcile(inputs).final_change_set
+
+    assert [item.id for item in first.human_decisions] == ["HR-001"]
+    assert first.decision_id_remap == {"HR-002": "HR-001"}
+    assert first.decision_id_remap == replay.decision_id_remap
+    assert [item.model_dump() for item in first.human_decisions] == [
+        item.model_dump() for item in replay.human_decisions
+    ]
+    assert first.human_decisions[0].change_ids == ["RC-001", "RC-002", "RC-003"]
+    assert {
+        decision_id
+        for item in first.changes
+        for decision_id in item.human_decision_ids
+    } == {"HR-001"}
+    assert {
+        item.human_decision_id
+        for change_item in first.changes
+        for item in change_item.issues
+        if item.human_decision_id is not None
+    } == {"HR-001"}
+    assert {
+        item.root_decision_id
+        for item in first.dependencies
+        if item.root_decision_id is not None
+    } == {"HR-001"}
+
+
 def test_resolved_link_decision_can_remove_only_wikilink_markup(tmp_path: Path):
     result = reconcile(unresolved_link_inputs(tmp_path), {"HR-001": "REMOVE_LINK"})
 

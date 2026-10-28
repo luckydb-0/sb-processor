@@ -201,6 +201,47 @@ def _drop_decisions(decisions: list[HumanDecision], decision_ids: set[str]) -> N
     decisions[:] = [item for item in decisions if item.id not in decision_ids]
 
 
+def _record_decision_remap(remap: dict[str, str], old_ids: set[str], root_id: str) -> None:
+    for old_id in sorted(old_ids):
+        if old_id != root_id:
+            remap[old_id] = root_id
+    for old_id in sorted(remap):
+        target = remap[old_id]
+        seen = {old_id}
+        while target in remap and target not in seen:
+            seen.add(target)
+            target = remap[target]
+        remap[old_id] = target
+
+
+def _remap_decision_references(
+        changes: list[ReconciledChange], dependencies, collisions, accepted_risks,
+        remap: dict[str, str]) -> None:
+    def canonical(decision_id: str | None) -> str | None:
+        while decision_id in remap:
+            decision_id = remap[decision_id]
+        return decision_id
+
+    def stable_ids(values: list[str]) -> list[str]:
+        mapped = [canonical(value) for value in values]
+        return list(dict.fromkeys(item for item in mapped if item is not None))
+
+    for change in changes:
+        change.human_decision_ids = stable_ids(change.human_decision_ids)
+        for issue in change.issues:
+            issue.human_decision_id = canonical(issue.human_decision_id)
+        for loss in change.material_losses:
+            loss.decision_id = canonical(loss.decision_id)
+    for dependency in dependencies:
+        dependency.root_decision_id = canonical(dependency.root_decision_id)
+    for collision in collisions:
+        collision.human_decision_id = canonical(collision.human_decision_id)
+    for risk in accepted_risks:
+        mapped = canonical(risk.decision_id)
+        if mapped is not None:
+            risk.decision_id = mapped
+
+
 def _replace_issue_decisions(changes: list[ReconciledChange], old_ids: set[str],
                              root_id: str) -> list[str]:
     issue_ids: list[str] = []
@@ -227,6 +268,7 @@ def _group_identity_decisions(
         decisions: list[HumanDecision],
         dependencies,
         identity_analysis,
+        decision_id_remap: dict[str, str],
 ) -> dict[str, IdentityResolutionPlan]:
     plans: dict[str, IdentityResolutionPlan] = {}
     change_by_path = {
@@ -255,6 +297,7 @@ def _group_identity_decisions(
                 and issue.human_decision_id is not None)
         }
         root_id = sorted(old_ids)[0] if old_ids else _next_decision_id(decisions)
+        _record_decision_remap(decision_id_remap, old_ids, root_id)
         issue_ids = _replace_issue_decisions(changes, old_ids, root_id)
         if not issue_ids:
             direct_change = next(item for item in changes if item.id in participant_ids)
@@ -338,6 +381,7 @@ def _reconcile_dependency_decisions(
         changes: list[ReconciledChange],
         decisions: list[HumanDecision],
         dependencies,
+        decision_id_remap: dict[str, str],
 ) -> None:
     decision_by_id = {item.id: item for item in decisions}
     change_by_id = {item.id: item for item in changes}
@@ -366,6 +410,7 @@ def _reconcile_dependency_decisions(
         root = decision_by_id.get(dependency.root_decision_id)
         if root is None:
             continue
+        _record_decision_remap(decision_id_remap, old_ids, root.id)
         _drop_decisions(decisions, old_ids - {root.id})
         source.human_decision_ids = [
             item for item in source.human_decision_ids
@@ -442,8 +487,13 @@ def _reconcile_dependency_decisions(
                 if issue.human_decision_id is not None:
                     old_ids.add(issue.human_decision_id)
         root_id = sorted(old_ids)[0] if old_ids else _next_decision_id(decisions)
+        grouped_decisions = [item for item in decisions if item.id in old_ids]
+        _record_decision_remap(decision_id_remap, old_ids, root_id)
         _drop_decisions(decisions, old_ids)
-        affected_change_ids = sorted({item.source_change_id for item in records})
+        affected_change_ids = sorted(
+            {item.source_change_id for item in records}
+            | {change_id for item in grouped_decisions for change_id in item.change_ids}
+        )
         for change_id in affected_change_ids:
             source = change_by_id[change_id]
             source.human_decision_ids = [
@@ -461,7 +511,10 @@ def _reconcile_dependency_decisions(
         decisions.append(HumanDecision(
             id=root_id,
             change_ids=affected_change_ids,
-            issue_ids=sorted(affected_issues),
+            issue_ids=sorted(
+                set(affected_issues)
+                | {issue_id for item in grouped_decisions for issue_id in item.issue_ids}
+            ),
             category=DecisionCategory.UNRESOLVED_DEPENDENCY.value,
             status=DecisionStatus.PENDING,
             question=(
@@ -511,7 +564,8 @@ def _reconcile_dependency_decisions(
 def _group_content_preservation_decisions(
         inputs: ReconciliationInputs,
         changes: list[ReconciledChange],
-        decisions: list[HumanDecision]) -> None:
+        decisions: list[HumanDecision],
+        decision_id_remap: dict[str, str]) -> None:
     for change in changes:
         losses = material_losses(inputs, change)
         if not losses:
@@ -526,6 +580,7 @@ def _group_content_preservation_decisions(
             if issue.human_decision_id is not None
         }
         root_id = sorted(old_ids)[0] if old_ids else _next_decision_id(decisions)
+        _record_decision_remap(decision_id_remap, old_ids, root_id)
         issue_ids = _replace_issue_decisions(changes, old_ids, root_id)
         if not issue_ids:
             synthetic = ReconciledIssue(
@@ -604,6 +659,7 @@ def reconcile(inputs: ReconciliationInputs,
     known_targets = _known_targets(inputs)
     reconciled_changes: list[ReconciledChange] = []
     decisions: list[HumanDecision] = []
+    decision_id_remap: dict[str, str] = {}
     decision_number = 0
 
     for change_index, change in enumerate(inputs.reviewed_proposal.note_changes):
@@ -706,7 +762,9 @@ def reconcile(inputs: ReconciliationInputs,
         ))
 
     change_by_id = {item.id: item for item in reconciled_changes}
-    _group_content_preservation_decisions(inputs, reconciled_changes, decisions)
+    _group_content_preservation_decisions(
+        inputs, reconciled_changes, decisions, decision_id_remap
+    )
 
     initial_identities = build_effective_identity_registry(inputs, reconciled_changes)
     initial_dependencies = analyze_dependencies(
@@ -718,9 +776,17 @@ def reconcile(inputs: ReconciliationInputs,
         decisions,
         initial_dependencies,
         initial_identities,
+        decision_id_remap,
     )
     _reconcile_dependency_decisions(
-        reconciled_changes, decisions, initial_dependencies
+        reconciled_changes, decisions, initial_dependencies, decision_id_remap
+    )
+    _remap_decision_references(
+        reconciled_changes,
+        initial_dependencies,
+        initial_identities.collisions,
+        [],
+        decision_id_remap,
     )
     identity_participants = {
         collision.human_decision_id: list(collision.change_ids)
@@ -997,6 +1063,13 @@ def reconcile(inputs: ReconciliationInputs,
         for reconciled in [*newly_blocked, *atomic_newly_blocked]:
             reconciled.status = ReconciledChangeStatus.BLOCKED
 
+    _remap_decision_references(
+        reconciled_changes,
+        final_dependencies,
+        final_identities.collisions,
+        accepted_risks,
+        decision_id_remap,
+    )
     final_findings = validate_final_changes(inputs, reconciled_changes)
     for reconciled in reconciled_changes:
         reconciled.validation_findings = [item for item in final_findings if reconciled.id in item.change_ids]
@@ -1013,6 +1086,7 @@ def reconcile(inputs: ReconciliationInputs,
         pre_review_adjustments=inputs.pre_review_adjustments,
         changes=reconciled_changes,
         human_decisions=decisions,
+        decision_id_remap=decision_id_remap,
         unresolved_decision_ids=unresolved,
         validation_findings=final_findings,
         dependencies=final_dependencies,
