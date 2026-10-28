@@ -147,6 +147,16 @@ def _write_diff(root: Path, inputs: ReconciliationInputs, change) -> str:
 
 def _write_preview(root: Path, result: ReconciliationResult, inputs: ReconciliationInputs) -> str:
     final = result.final_change_set
+    state_explanation = (
+        "No applicable CREATE or UPDATE changes remain."
+        if not final.applicable_change_ids
+        else (
+            f"{len(final.applicable_change_ids)} applicable changes passed all mandatory "
+            "pre-write validations."
+            if final.state.value == "READY_FOR_WRITE"
+            else f"{len(final.applicable_change_ids)} changes are currently applicable."
+        )
+    )
     dependency_groups: dict[tuple[str, str, str | None, str | None], list] = {}
     for dependency in final.dependencies:
         key = (
@@ -186,6 +196,7 @@ def _write_preview(root: Path, result: ReconciliationResult, inputs: Reconciliat
         else:
             groups["UNCHANGED"].append(f"- `{path}`")
     lines = ["# Write Preview", "", f"State: `{final.state.value}`", "",
+             state_explanation, "",
              "No vault files were written.", ""]
     for name in (
         "CREATE", "UPDATE", "UNCHANGED", "SKIPPED", "DEFERRED", "BLOCKED", "INVALID"

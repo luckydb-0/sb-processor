@@ -241,6 +241,7 @@ class PreReviewAdjustment(StrictModel):
 class FinalChangeSetState(str, Enum):
     PENDING_HUMAN_REVIEW = "PENDING_HUMAN_REVIEW"
     READY_FOR_WRITE = "READY_FOR_WRITE"
+    NO_APPLICABLE_CHANGES = "NO_APPLICABLE_CHANGES"
     INVALID = "INVALID"
 
 

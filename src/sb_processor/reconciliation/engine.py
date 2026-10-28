@@ -1082,6 +1082,13 @@ def reconcile(inputs: ReconciliationInputs,
     unresolved = [item.id for item in decisions if item.status is DecisionStatus.PENDING]
     has_errors = any(item.severity is ValidationSeverity.ERROR for item in final_findings)
     has_blocking_identities = any(item.blocking for item in final_identities.collisions)
+    applicable_change_ids = [
+        item.id for item in reconciled_changes
+        if item.status in (
+            ReconciledChangeStatus.READY,
+            ReconciledChangeStatus.FIXED,
+        ) and item.final_action in (Action.CREATE, Action.UPDATE)
+    ]
     final = FinalChangeSet(
         source_run_id=inputs.run.name,
         reconciliation_version=RECONCILIATION_VERSION,
@@ -1096,17 +1103,12 @@ def reconcile(inputs: ReconciliationInputs,
         dependencies=final_dependencies,
         identity_collisions=list(final_identities.collisions),
         accepted_risks=accepted_risks,
-        applicable_change_ids=[
-            item.id for item in reconciled_changes
-            if item.status in (
-                ReconciledChangeStatus.READY,
-                ReconciledChangeStatus.FIXED,
-            ) and item.final_action in (Action.CREATE, Action.UPDATE)
-        ],
+        applicable_change_ids=applicable_change_ids,
         state=(FinalChangeSetState.INVALID if has_errors
                else FinalChangeSetState.PENDING_HUMAN_REVIEW if unresolved
                else FinalChangeSetState.INVALID if has_blocking_identities
-               else FinalChangeSetState.READY_FOR_WRITE),
+               else FinalChangeSetState.READY_FOR_WRITE if applicable_change_ids
+               else FinalChangeSetState.NO_APPLICABLE_CHANGES),
     )
     integrity_findings = validate_decision_references(final)
     if integrity_findings:

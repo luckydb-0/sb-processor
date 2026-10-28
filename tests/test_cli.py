@@ -161,7 +161,7 @@ def test_reconcile_cli_runs_pending_then_resolved_without_mutating_inputs(tmp_pa
     assert main(["reconcile", "--run", str(run), "--vault", str(vault),
                  "--decisions", str(decisions)]) == 0
     resolved_output = capsys.readouterr().out
-    assert "READY_FOR_WRITE" in resolved_output
+    assert "NO_APPLICABLE_CHANGES" in resolved_output
     assert str(run / "reconciliation" / "WRITE_PREVIEW.md") in resolved_output
     assert {path: sha256(path) for path in watched} == before
     assert list(vault.rglob("*")) == []

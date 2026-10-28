@@ -182,7 +182,7 @@ def test_freeze_release_reconciliation_lifecycle_is_auditable_and_does_not_write
     resolved = reconcile(inputs, selections)
     resolved_output = stage_reconciliation(run, resolved, inputs)
 
-    assert resolved.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
+    assert resolved.final_change_set.state is FinalChangeSetState.NO_APPLICABLE_CHANGES
     assert resolved.final_change_set.unresolved_decision_ids == []
     assert any(item.status is DecisionStatus.DEFERRED
                for item in resolved.final_change_set.human_decisions)

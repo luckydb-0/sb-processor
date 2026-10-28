@@ -685,7 +685,7 @@ def test_link_to_blocked_change_is_exposed_as_dependent_human_decision(tmp_path:
     assert dependency.root_decision_id == "HR-001"
     assert dependency.blocking is True
     assert pending.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
-    assert resolved.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
+    assert resolved.final_change_set.state is FinalChangeSetState.NO_APPLICABLE_CHANGES
     assert resolved.final_change_set.changes[1].status is ReconciledChangeStatus.BLOCKED
 
 
@@ -1021,7 +1021,7 @@ def test_post_selection_identity_collision_is_excluded_from_ready_subset(tmp_pat
 
     result = reconcile(inputs, {decision.id: "ACCEPT_STAGED_RISK"})
 
-    assert result.final_change_set.state is FinalChangeSetState.READY_FOR_WRITE
+    assert result.final_change_set.state is FinalChangeSetState.NO_APPLICABLE_CHANGES
     assert result.final_change_set.applicable_change_ids == []
     assert result.final_change_set.changes[0].status is ReconciledChangeStatus.BLOCKED
     assert not [

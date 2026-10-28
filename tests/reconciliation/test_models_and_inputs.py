@@ -68,11 +68,11 @@ def test_final_change_set_serializes_explicit_state_and_provenance():
         human_decisions=[],
         unresolved_decision_ids=[],
         validation_findings=[],
-        state=FinalChangeSetState.READY_FOR_WRITE,
+        state=FinalChangeSetState.NO_APPLICABLE_CHANGES,
     )
 
     payload = result.model_dump(mode="json")
-    assert payload["state"] == "READY_FOR_WRITE"
+    assert payload["state"] == "NO_APPLICABLE_CHANGES"
     assert payload["reconciliation_version"] == "reconciliation-v1"
 
 
