@@ -9,6 +9,8 @@ import pytest
 from sb_processor.reconciliation.artifacts import run_reconciliation, stage_reconciliation
 from sb_processor.reconciliation.engine import reconcile
 from sb_processor.reconciliation.inputs import load_reconciliation_inputs
+from sb_processor.reconciliation.models import FinalChangeSetState
+from sb_processor.reconciliation.validators import validate_decision_references
 
 from .helpers import change, proposal, review, review_issue, reviewed_change, write_note, write_run
 
@@ -135,6 +137,20 @@ def test_write_preview_groups_actions_and_links_stable_update_diff(tmp_path: Pat
     assert "--- a/Dots/Existing.md" in diff
     assert "+++ b/Dots/Existing.md" in diff
     assert "+A new supported sentence." in diff
+
+
+def test_write_preview_exposes_dangling_decision_reference_as_blocking(tmp_path: Path):
+    run, inputs, result = artifact_fixture(tmp_path)
+    final = result.final_change_set
+    final.changes[0].human_decision_ids.append("HR-404")
+    final.validation_findings.extend(validate_decision_references(final))
+    final.state = FinalChangeSetState.INVALID
+
+    output = stage_reconciliation(run, result, inputs)
+    preview = (output / "WRITE_PREVIEW.md").read_text(encoding="utf-8")
+
+    assert "DANGLING_HUMAN_DECISION_REFERENCE" in preview
+    assert "changes[RC-001].human_decision_ids references missing HR-404" in preview
 
 
 def test_write_preview_shows_explicitly_accepted_content_loss(tmp_path: Path):

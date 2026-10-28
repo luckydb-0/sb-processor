@@ -34,7 +34,11 @@ from .models import (
     PatchOperation,
     ValidationSeverity,
 )
-from .validators import material_losses, validate_final_changes
+from .validators import (
+    material_losses,
+    validate_decision_references,
+    validate_final_changes,
+)
 
 
 RECONCILIATION_VERSION = "reconciliation-v1.1"
@@ -1104,4 +1108,12 @@ def reconcile(inputs: ReconciliationInputs,
                else FinalChangeSetState.INVALID if has_blocking_identities
                else FinalChangeSetState.READY_FOR_WRITE),
     )
+    integrity_findings = validate_decision_references(final)
+    if integrity_findings:
+        final.validation_findings.extend(integrity_findings)
+        for reconciled in final.changes:
+            reconciled.validation_findings.extend(
+                item for item in integrity_findings if reconciled.id in item.change_ids
+            )
+        final.state = FinalChangeSetState.INVALID
     return ReconciliationResult(final_change_set=final)

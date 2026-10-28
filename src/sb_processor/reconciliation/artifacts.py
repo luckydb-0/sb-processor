@@ -16,6 +16,7 @@ from .models import (
     ReconciledChangeStatus,
     ReconciliationResult,
     FinalChangeSet,
+    ValidationSeverity,
 )
 
 
@@ -216,6 +217,9 @@ def _write_preview(root: Path, result: ReconciliationResult, inputs: Reconciliat
     for decision in final.human_decisions:
         if decision.blocking and decision.status is DecisionStatus.PENDING:
             blocking.append(f"- `{decision.id}` — {decision.question}")
+    for finding in final.validation_findings:
+        if finding.severity is ValidationSeverity.ERROR:
+            blocking.append(f"- `{finding.code}` — {finding.message}")
     for collision in final.identity_collisions:
         if collision.blocking:
             blocking.append(

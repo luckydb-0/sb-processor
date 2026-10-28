@@ -11,6 +11,7 @@ from ..review.validators import validate_change
 from ..knowledge.registry import normalize
 from .inputs import ReconciliationInputs, resolve_vault_target
 from .models import (
+    FinalChangeSet,
     MaterialLossKind,
     MaterialLossRecord,
     ReconciledChange,
@@ -23,6 +24,70 @@ from .models import (
 def _finding(code: str, message: str, *change_ids: str,
              severity: ValidationSeverity = ValidationSeverity.ERROR) -> ValidationFinding:
     return ValidationFinding(code=code, severity=severity, message=message, change_ids=list(change_ids))
+
+
+def validate_decision_references(final: FinalChangeSet) -> list[ValidationFinding]:
+    """Return deterministic blocking findings for missing human-decision IDs."""
+    declared = {item.id for item in final.human_decisions}
+    references: list[tuple[str, str, tuple[str, ...]]] = []
+
+    def add(origin: str, decision_id: str | None, *change_ids: str) -> None:
+        if decision_id is not None:
+            references.append((origin, decision_id, tuple(change_ids)))
+
+    for change in final.changes:
+        for decision_id in change.human_decision_ids:
+            add(f"changes[{change.id}].human_decision_ids", decision_id, change.id)
+        for issue in change.issues:
+            add(
+                f"changes[{change.id}].issues[{issue.id}].human_decision_id",
+                issue.human_decision_id,
+                change.id,
+            )
+        for dependency in change.dependencies:
+            add(
+                f"changes[{change.id}].dependencies[{dependency.id}].root_decision_id",
+                dependency.root_decision_id,
+                change.id,
+            )
+        for loss in change.material_losses:
+            add(
+                f"changes[{change.id}].material_losses[{loss.id}].decision_id",
+                loss.decision_id,
+                change.id,
+            )
+    for dependency in final.dependencies:
+        add(
+            f"dependencies[{dependency.id}].root_decision_id",
+            dependency.root_decision_id,
+            dependency.source_change_id,
+        )
+    for collision in final.identity_collisions:
+        add(
+            f"identity_collisions[{collision.id}].human_decision_id",
+            collision.human_decision_id,
+            *collision.change_ids,
+        )
+    for risk in final.accepted_risks:
+        add(
+            f"accepted_risks[{risk.id}].decision_id",
+            risk.decision_id,
+            *risk.change_ids,
+        )
+    for decision_id in final.unresolved_decision_ids:
+        add("unresolved_decision_ids", decision_id)
+    for old_id, decision_id in final.decision_id_remap.items():
+        add(f"decision_id_remap[{old_id}]", decision_id)
+
+    return [
+        _finding(
+            "DANGLING_HUMAN_DECISION_REFERENCE",
+            f"{origin} references missing {decision_id}",
+            *change_ids,
+        )
+        for origin, decision_id, change_ids in sorted(references)
+        if decision_id not in declared
+    ]
 
 
 def _safe_path(value: str) -> bool:
