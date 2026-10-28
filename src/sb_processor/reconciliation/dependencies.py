@@ -4,11 +4,9 @@ import re
 from collections import defaultdict
 from pathlib import PurePosixPath
 
-import yaml
-
 from ..knowledge.registry import normalize
 from ..models import Action
-from .identities import IdentityAnalysis
+from .identities import IdentityAnalysis, content_identity, is_indexable_identity_path
 from .inputs import ReconciliationInputs
 from .models import (
     DependencyRecord,
@@ -21,23 +19,6 @@ from .models import (
 
 
 _WIKILINK = re.compile(r"\[\[([^\[\]\n]+)\]\]")
-_FRONTMATTER = re.compile(r"\A---\s*\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", re.DOTALL)
-
-
-def _aliases(content: str) -> list[str]:
-    match = _FRONTMATTER.match(content)
-    if match is None:
-        return []
-    try:
-        metadata = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
-        return []
-    if not isinstance(metadata, dict):
-        return []
-    value = metadata.get("aliases")
-    if isinstance(value, str):
-        return [value]
-    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
 def _target_text(inner: str) -> str:
@@ -51,13 +32,16 @@ def _proposed_identities(inputs: ReconciliationInputs,
     for change in changes:
         source = inputs.reviewed_proposal.note_changes[change.agent_a_change_index]
         path = change.final_target_path or change.original_target_path
+        if not is_indexable_identity_path(inputs, path, source.note_type):
+            continue
         pure_path = PurePosixPath(path)
         content = change.final_content if change.final_content is not None else source.content
+        title, aliases = content_identity(content)
         identities = [
             pure_path.with_suffix("").as_posix(),
             pure_path.stem,
-            source.title,
-            *_aliases(content),
+            *((title,) if title is not None else ()),
+            *aliases,
         ]
         for identity in identities:
             normalized = normalize(identity)
@@ -120,9 +104,14 @@ def analyze_dependencies(
             proposed_paths = proposed.get(normalized, set())
 
             if "/" in target_text:
-                expected_path = f"{target_text}.md"
-                candidates = ({expected_path} if expected_path in effective_paths | proposed_paths
-                              else set())
+                target_path = f"{target_text}.md"
+                all_paths = {
+                    item.canonical_path for item in identities.claims
+                } | {path for paths in proposed.values() for path in paths}
+                candidates = {
+                    path for path in all_paths
+                    if path == target_path or path.endswith(f"/{target_path}")
+                }
             else:
                 candidates = effective_paths | proposed_paths
 

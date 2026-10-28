@@ -9,7 +9,8 @@ from pathlib import PurePosixPath
 import yaml
 
 from ..knowledge.registry import normalize
-from ..models import Action
+from ..knowledge.retrieval import RetrievalPolicy
+from ..models import Action, NoteMetadata
 from .inputs import ReconciliationInputs
 from .models import (
     IdentityClaim,
@@ -23,7 +24,6 @@ from .models import (
 
 
 _FRONTMATTER = re.compile(r"\A---\s*\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", re.DOTALL)
-_TITLE = re.compile(r"(?m)^#\s+(.+?)\s*$")
 _EXCLUDED = {
     ReconciledChangeStatus.DEFERRED,
     ReconciledChangeStatus.SKIPPED,
@@ -34,7 +34,7 @@ _EXCLUDED = {
 @dataclass(frozen=True)
 class EffectiveNote:
     path: str
-    title: str
+    title: str | None
     aliases: tuple[str, ...]
     change_id: str | None
     from_existing_vault: bool
@@ -67,7 +67,7 @@ def _strings(value: object) -> tuple[str, ...]:
     return ()
 
 
-def _content_identity(path: str, content: str) -> tuple[str, tuple[str, ...]]:
+def content_identity(content: str) -> tuple[str | None, tuple[str, ...]]:
     match = _FRONTMATTER.match(content)
     metadata: dict = {}
     if match is not None:
@@ -77,17 +77,39 @@ def _content_identity(path: str, content: str) -> tuple[str, tuple[str, ...]]:
             parsed = None
         if isinstance(parsed, dict):
             metadata = parsed
-    body = content[match.end():] if match is not None else content
-    heading = _TITLE.search(body)
     title_value = metadata.get("title")
-    title = (
-        title_value.strip()
-        if isinstance(title_value, str) and title_value.strip()
-        else heading.group(1).strip()
-        if heading is not None
-        else PurePosixPath(path).stem
-    )
+    title = title_value.strip() if isinstance(title_value, str) and title_value.strip() else None
     return title, _strings(metadata.get("aliases"))
+
+
+def reconciliation_identity_policy(inputs: ReconciliationInputs) -> RetrievalPolicy:
+    """Return the established university note roots used by reconciliation."""
+    atlas = (
+        (inputs.vault / "Atlas" / "Dots").is_dir()
+        or any(note.path.startswith("Atlas/") for note in inputs.vault_notes)
+        or any(item.target_path.startswith("Atlas/")
+               for item in inputs.reviewed_proposal.note_changes)
+    )
+    prefix = "Atlas/" if atlas else ""
+    return RetrievalPolicy(roots={
+        "concept": f"{prefix}Dots",
+        "map": f"{prefix}Maps",
+        "course": f"{prefix}Sources/University",
+        "lecture": f"{prefix}Sources/University",
+    })
+
+
+def is_indexable_identity_path(
+        inputs: ReconciliationInputs, path: str, note_type: str | None) -> bool:
+    metadata = NoteMetadata(
+        path=path,
+        filename=PurePosixPath(path).name,
+        title="",
+        note_type=note_type,
+        aliases=[],
+        maps=[],
+    )
+    return reconciliation_identity_policy(inputs).kind(metadata) is not None
 
 
 def _effective_notes(inputs: ReconciliationInputs,
@@ -95,12 +117,18 @@ def _effective_notes(inputs: ReconciliationInputs,
     notes = {
         note.path: EffectiveNote(
             path=note.path,
-            title=note.title,
+            title=(
+                note.frontmatter["title"].strip()
+                if isinstance(note.frontmatter.get("title"), str)
+                and note.frontmatter["title"].strip()
+                else None
+            ),
             aliases=tuple(note.aliases),
             change_id=None,
             from_existing_vault=True,
         )
         for note in inputs.vault_notes
+        if is_indexable_identity_path(inputs, note.path, note.note_type)
     }
     for change in changes:
         if (change.status in _EXCLUDED
@@ -115,12 +143,15 @@ def _effective_notes(inputs: ReconciliationInputs,
                 and not change.human_decision_required):
             continue
         path = change.final_target_path or change.original_target_path
-        title, aliases = _content_identity(path, change.final_content)
+        source = inputs.reviewed_proposal.note_changes[change.agent_a_change_index]
+        if not is_indexable_identity_path(inputs, path, source.note_type):
+            continue
+        title, aliases = content_identity(change.final_content)
         existing = notes.get(path)
         identity_changed = (
             change.final_action is Action.CREATE
             or existing is None
-            or normalize(existing.title) != normalize(title)
+            or normalize(existing.title or "") != normalize(title or "")
             or {normalize(item) for item in existing.aliases}
             != {normalize(item) for item in aliases}
         )
@@ -141,9 +172,10 @@ def _claims(notes: list[EffectiveNote]) -> list[IdentityClaim]:
         values = [
             (path.with_suffix("").as_posix(), IdentityClaimKind.CANONICAL_PATH),
             (path.stem, IdentityClaimKind.BASENAME),
-            (note.title, IdentityClaimKind.TITLE),
-            *((alias, IdentityClaimKind.ALIAS) for alias in note.aliases),
         ]
+        if note.title is not None:
+            values.append((note.title, IdentityClaimKind.TITLE))
+        values.extend((alias, IdentityClaimKind.ALIAS) for alias in note.aliases)
         seen: set[tuple[str, IdentityClaimKind]] = set()
         for value, kind in values:
             normalized = normalize(value)

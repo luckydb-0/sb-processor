@@ -84,11 +84,11 @@ def test_freeze_release_reconciliation_lifecycle_is_auditable_and_does_not_write
     assert "and data mining" not in regression.final_content
 
     assert pending.final_change_set.state is FinalChangeSetState.PENDING_HUMAN_REVIEW
-    assert len(pending.final_change_set.human_decisions) == 19
+    assert len(pending.final_change_set.human_decisions) == 18
     assert sum(
         item.category == "UNRESOLVED_DEPENDENCY"
         for item in pending.final_change_set.human_decisions
-    ) == 4
+    ) == 3
     assert all(item.status is DecisionStatus.PENDING
                for item in pending.final_change_set.human_decisions)
     assert (pending_output / "HUMAN_REVIEW.md").is_file()

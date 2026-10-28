@@ -117,10 +117,10 @@ def test_links_resolve_to_existing_vault_and_applicable_update(tmp_path: Path):
 
 
 def test_explicit_full_path_disambiguates_duplicate_basenames(tmp_path: Path):
-    source = "---\ntype: concept\n---\n# Source\nSee [[Area A/Topic]].\n"
+    source = "---\ntype: concept\n---\n# Source\nSee [[Dots/Area A/Topic]].\n"
     inputs = loaded_inputs(tmp_path, [change(path="Dots/Source.md", content=source)], {
-        "Area A/Topic.md": "---\ntype: concept\n---\n# First Topic\nA.\n",
-        "Area B/Topic.md": "---\ntype: concept\n---\n# Second Topic\nB.\n",
+        "Dots/Area A/Topic.md": "---\ntype: concept\n---\n# First Topic\nA.\n",
+        "Dots/Area B/Topic.md": "---\ntype: concept\n---\n# Second Topic\nB.\n",
     })
     changes = [reconciled("RC-001", 0, "Dots/Source.md", Action.CREATE, source)]
 
@@ -128,7 +128,7 @@ def test_explicit_full_path_disambiguates_duplicate_basenames(tmp_path: Path):
         inputs, changes, build_effective_identity_registry(inputs, changes)
     )[0]
 
-    assert record.target_path == "Area A/Topic.md"
+    assert record.target_path == "Dots/Area A/Topic.md"
     assert record.target_state is DependencyTargetState.TARGET_EXISTS_IN_VAULT
     assert record.blocking is False
 
@@ -187,3 +187,43 @@ def test_missing_and_ambiguous_targets_are_blocking(tmp_path: Path):
     }
     assert len(dependency_findings(records)) == 2
     assert all(item.blocking for item in records)
+
+
+def test_unqualified_dot_link_ignores_map_display_heading_and_repository_files(
+        tmp_path: Path):
+    source = (
+        "---\ntype: concept\naliases: []\n---\n# Source\n"
+        "See [[Machine Learning]] and [[Maps/Machine Learning - Map]].\n"
+    )
+    inputs = loaded_inputs(tmp_path, [change(path="Atlas/Dots/Source.md", content=source)], {
+        "Atlas/Dots/Machine Learning.md": (
+            "---\ntype: concept\naliases: []\n---\n# Machine Learning\nDot.\n"
+        ),
+        "Atlas/Maps/Machine Learning - Map.md": (
+            "---\ntype: map\naliases: []\n---\n# Machine Learning\nMap.\n"
+        ),
+        "README.md": "# Machine Learning\nRepository.\n",
+        "config/Machine Learning.md": "# Machine Learning\nConfiguration.\n",
+        "prompts/Machine Learning.md": "# Machine Learning\nPrompt.\n",
+    })
+    changes = [reconciled(
+        "RC-001", 0, "Atlas/Dots/Source.md", Action.CREATE, source
+    )]
+
+    records = analyze_dependencies(
+        inputs, changes, build_effective_identity_registry(inputs, changes)
+    )
+
+    assert [(item.normalized_target, item.target_path, item.target_state) for item in records] == [
+        (
+            "machine learning",
+            "Atlas/Dots/Machine Learning.md",
+            DependencyTargetState.TARGET_EXISTS_IN_VAULT,
+        ),
+        (
+            "maps machine learning map",
+            "Atlas/Maps/Machine Learning - Map.md",
+            DependencyTargetState.TARGET_EXISTS_IN_VAULT,
+        ),
+    ]
+    assert all(not item.blocking for item in records)

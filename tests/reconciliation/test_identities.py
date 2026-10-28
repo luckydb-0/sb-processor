@@ -51,8 +51,14 @@ def reconciled(
 
 
 def test_effective_registry_includes_complete_vault_create_and_update_identities(tmp_path: Path):
-    updated = "---\ntype: concept\naliases: [Fresh Alias]\n---\n# Renamed Existing\nBody.\n"
-    created = "---\ntype: concept\naliases: [Class]\n---\n# Classification\nBody.\n"
+    updated = (
+        "---\ntype: concept\ntitle: Renamed Existing\naliases: [Fresh Alias]\n---\n"
+        "# Display heading\nBody.\n"
+    )
+    created = (
+        "---\ntype: concept\ntitle: Classification\naliases: [Class]\n---\n"
+        "# Display heading\nBody.\n"
+    )
     inputs = loaded_inputs(
         tmp_path,
         [
@@ -60,8 +66,14 @@ def test_effective_registry_includes_complete_vault_create_and_update_identities
             change(path="Dots/Classification.md", content=created),
         ],
         {
-            "Dots/Existing.md": "---\ntype: concept\naliases: [Old Alias]\n---\n# Existing\nOld.\n",
-            "Dots/Unrelated.md": "---\ntype: concept\naliases: [Background]\n---\n# Unrelated\nBody.\n",
+            "Dots/Existing.md": (
+                "---\ntype: concept\ntitle: Existing\naliases: [Old Alias]\n---\n"
+                "# Display heading\nOld.\n"
+            ),
+            "Dots/Unrelated.md": (
+                "---\ntype: concept\ntitle: Unrelated\naliases: [Background]\n---\n"
+                "# Display heading\nBody.\n"
+            ),
         },
     )
 
@@ -81,14 +93,14 @@ def test_effective_registry_includes_complete_vault_create_and_update_identities
 
 
 def test_deferred_update_retains_existing_title_and_aliases(tmp_path: Path):
-    proposed = "---\ntype: concept\naliases: []\n---\n# Renamed\nDraft.\n"
+    proposed = "---\ntype: concept\ntitle: Renamed\naliases: []\n---\n# Display\nDraft.\n"
     inputs = loaded_inputs(
         tmp_path,
         [change(path="Dots/Predictive Classification.md", action="UPDATE", content=proposed)],
         {
             "Dots/Predictive Classification.md": (
-                "---\ntype: concept\naliases: [Classification]\n---\n"
-                "# Predictive Classification\nExisting.\n"
+                "---\ntype: concept\ntitle: Predictive Classification\n"
+                "aliases: [Classification]\n---\n# Display\nExisting.\n"
             ),
         },
     )
@@ -141,8 +153,8 @@ def test_same_note_duplicate_claims_do_not_collide_and_existing_only_collision_i
         tmp_path,
         [],
         {
-            "Dots/One.md": "---\ntype: concept\naliases: [Shared, One]\n---\n# Shared\nOne.\n",
-            "Archive/Two.md": "---\ntype: concept\naliases: []\n---\n# Shared\nTwo.\n",
+            "Dots/One.md": "---\ntype: concept\naliases: [Shared, One]\n---\n# One\nOne.\n",
+            "Dots/Two.md": "---\ntype: concept\naliases: [Shared]\n---\n# Two\nTwo.\n",
         },
     )
 
@@ -153,10 +165,44 @@ def test_same_note_duplicate_claims_do_not_collide_and_existing_only_collision_i
     assert shared[0].blocking is False
     assert shared[0].change_ids == []
     assert {item.canonical_path for item in shared[0].claims} == {
-        "Archive/Two.md",
         "Dots/One.md",
+        "Dots/Two.md",
     }
     assert not any(
         len({claim.canonical_path for claim in collision.claims}) == 1
         for collision in analysis.collisions
+    )
+
+
+def test_display_headings_and_repository_markdown_do_not_claim_global_identities(
+        tmp_path: Path):
+    inputs = loaded_inputs(
+        tmp_path,
+        [],
+        {
+            "Atlas/Dots/Machine Learning.md": (
+                "---\ntype: concept\naliases: []\n---\n# Machine Learning\nDot.\n"
+            ),
+            "Atlas/Maps/Machine Learning - Map.md": (
+                "---\ntype: map\naliases: []\n---\n# Machine Learning\nMap.\n"
+            ),
+            "README.md": "# Machine Learning\nRepository instructions.\n",
+            "config/Machine Learning.md": "# Machine Learning\nConfiguration.\n",
+            "prompts/Machine Learning.md": "# Machine Learning\nPrompt.\n",
+        },
+    )
+
+    analysis = build_effective_identity_registry(inputs, [])
+
+    machine_learning = analysis.by_normalized["machine learning"]
+    assert {(item.canonical_path, item.kind) for item in machine_learning} == {
+        ("Atlas/Dots/Machine Learning.md", IdentityClaimKind.BASENAME),
+    }
+    assert {note.path for note in analysis.notes} == {
+        "Atlas/Dots/Machine Learning.md",
+        "Atlas/Maps/Machine Learning - Map.md",
+    }
+    assert not any(
+        item.normalized_identity == "machine learning"
+        for item in analysis.collisions
     )

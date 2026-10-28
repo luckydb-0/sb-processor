@@ -71,7 +71,10 @@ def test_fix_applies_objective_and_exact_semantic_patches_in_issue_order(tmp_pat
         [change(content=content)],
         [reviewed_change("Dots/Topic.md", status="FIX", issue_indices=[0, 1])],
         issues,
-        vault_contents={"Sources/Lecture 01.md": "---\ntype: lecture\n---\n# Lecture 01\n"},
+        vault_contents={
+            "Sources/University/Lectures/Lecture 01.md":
+                "---\ntype: lecture\n---\n# Lecture 01\n"
+        },
     )
 
     result = reconcile(inputs)
@@ -171,7 +174,10 @@ def test_agent_b_review_required_with_only_auto_fixes_still_requires_human_decis
         [change(content=content)],
         [reviewed_change("Dots/Topic.md", status="REVIEW_REQUIRED", issue_indices=[0])],
         issues,
-        vault_contents={"Sources/Lecture 01.md": "---\ntype: lecture\n---\n# Lecture 01\n"},
+        vault_contents={
+            "Sources/University/Lectures/Lecture 01.md":
+                "---\ntype: lecture\n---\n# Lecture 01\n"
+        },
     )
 
     result = reconcile(inputs)
