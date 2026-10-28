@@ -41,7 +41,7 @@ from .validators import (
 )
 
 
-RECONCILIATION_VERSION = "reconciliation-v1.1"
+RECONCILIATION_VERSION = "reconciliation-v1.2"
 
 
 def _sha256_text(value: str) -> str:

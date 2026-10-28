@@ -46,6 +46,36 @@ def by_path(result, path: str):
                 if item.original_target_path == path)
 
 
+def decision_references(result) -> set[str]:
+    final = result.final_change_set
+    return {
+        *(
+            decision_id
+            for change in final.changes
+            for decision_id in change.human_decision_ids
+        ),
+        *(
+            issue.human_decision_id
+            for change in final.changes
+            for issue in change.issues
+            if issue.human_decision_id is not None
+        ),
+        *(
+            dependency.root_decision_id
+            for dependency in final.dependencies
+            if dependency.root_decision_id is not None
+        ),
+        *(
+            collision.human_decision_id
+            for collision in final.identity_collisions
+            if collision.human_decision_id is not None
+        ),
+        *(risk.decision_id for risk in final.accepted_risks),
+        *final.unresolved_decision_ids,
+        *final.decision_id_remap.values(),
+    }
+
+
 def test_freeze_release_reconciliation_lifecycle_is_auditable_and_does_not_write_vault(tmp_path: Path):
     run, vault = copied_release(tmp_path)
     run_before = hashes(run)
@@ -91,6 +121,29 @@ def test_freeze_release_reconciliation_lifecycle_is_auditable_and_does_not_write
     ) == 3
     assert all(item.status is DecisionStatus.PENDING
                for item in pending.final_change_set.human_decisions)
+    assert pending.final_change_set.reconciliation_version == "reconciliation-v1.2"
+    declared_decision_ids = {
+        item.id for item in pending.final_change_set.human_decisions
+    }
+    assert decision_references(pending) <= declared_decision_ids
+    assert pending.final_change_set.decision_id_remap["HR-018"] == "HR-004"
+    assert not any(
+        item.question.startswith(
+            "How should the unresolved dependency `[[Machine Learning]]`"
+        )
+        for item in pending.final_change_set.human_decisions
+    )
+    machine_learning_dependencies = [
+        item for item in pending.final_change_set.dependencies
+        if item.normalized_target == "machine learning"
+    ]
+    assert len(machine_learning_dependencies) == 18
+    assert all(
+        item.target_state.value == "TARGET_EXISTS_IN_VAULT"
+        and item.target_path == "Atlas/Dots/Machine Learning.md"
+        and not item.blocking
+        for item in machine_learning_dependencies
+    )
     assert (pending_output / "HUMAN_REVIEW.md").is_file()
 
     data_map_dependencies = [
@@ -184,6 +237,9 @@ def test_freeze_release_reconciliation_lifecycle_is_auditable_and_does_not_write
 
     assert resolved.final_change_set.state is FinalChangeSetState.NO_APPLICABLE_CHANGES
     assert resolved.final_change_set.unresolved_decision_ids == []
+    assert decision_references(resolved) <= {
+        item.id for item in resolved.final_change_set.human_decisions
+    }
     assert any(item.status is DecisionStatus.DEFERRED
                for item in resolved.final_change_set.human_decisions)
     assert not [
